@@ -1,22 +1,23 @@
+// com.chico.dbinspector.config.WebClientConfig
 package com.chico.dbinspector.config
 
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.http.HttpHeaders
+import org.springframework.http.MediaType
 import org.springframework.web.reactive.function.client.ExchangeStrategies
 import org.springframework.web.reactive.function.client.WebClient
 
 @Configuration
-class WebClientConfig(
-    @Value("\${dbinspector.sqlExecBaseUrl}") private val baseUrl: String,
-    @Value("\${dbinspector.apitoken}") private val token: String
-) {
+class WebClientConfig {
     @Bean
     fun sqlExecWebClient(builder: WebClient.Builder): WebClient =
         builder
-            .baseUrl(baseUrl)
-            .defaultHeader("Accept", "application/json")
-            .defaultHeaders { h -> h.setBearerAuth(token) }
+            .exchangeStrategies(
+                ExchangeStrategies.builder().codecs {
+                    it.defaultCodecs().maxInMemorySize(2 * 1024 * 1024) // 2 MB
+                }.build()
+            )
+            .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
             .build()
 }
-

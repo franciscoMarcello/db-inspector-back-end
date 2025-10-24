@@ -1,8 +1,10 @@
+// com.chico.dbinspector.service.SqlExecClient
 package com.chico.dbinspector.service
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Component
@@ -14,14 +16,25 @@ class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebCli
 
     private val mapper = jacksonObjectMapper()
 
-    fun exec(query: String, asDict: Boolean = true, withDescription: Boolean = true): Map<String, Any?> {
-        val payload = mapOf("query" to query, "asDict" to asDict, "withDescription" to withDescription)
+    fun exec(
+        endpointUrl: String,
+        bearer: String,
+        query: String,
+        asDict: Boolean = true,
+        withDescription: Boolean = true
+    ): Map<String, Any?> {
 
-        // Garanta que o baseUrl do bean termina em .../sql/exec/ (com / no final)
+        val payload = mapOf(
+            "query" to query,
+            "asDict" to asDict,
+            "withDescription" to withDescription
+        )
+
         val entity: ResponseEntity<String> = webClient.post()
-            .uri("") // baseUrl já aponta para o endpoint final
+            .uri(endpointUrl) // URL absoluta vinda do header
             .contentType(MediaType.APPLICATION_JSON)
             .accept(MediaType.APPLICATION_JSON)
+            .headers { h -> h.set(HttpHeaders.AUTHORIZATION, bearer) }
             .bodyValue(payload)
             .exchangeToMono { resp ->
                 val status = resp.statusCode()
@@ -33,17 +46,18 @@ class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebCli
                     .flatMap { body ->
                         if (status.is3xxRedirection) {
                             if (location == null) {
-                                return@flatMap Mono.error<ResponseEntity<String>>(IllegalStateException("3xx sem Location"))
+                                return@flatMap Mono.error<ResponseEntity<String>>(
+                                    IllegalStateException("3xx sem Location")
+                                )
                             }
-                            // re-POST mantendo método e payload
                             webClient.post().uri(location)
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .accept(MediaType.APPLICATION_JSON)
+                                .headers { h -> h.set(HttpHeaders.AUTHORIZATION, bearer) }
                                 .bodyValue(payload)
-                                .retrieve() // aqui pode usar toEntity
+                                .retrieve()
                                 .toEntity(String::class.java)
                         } else {
-                            // Monte um ResponseEntity manualmente
                             val e = ResponseEntity.status(status.value())
                                 .headers(headers)
                                 .body(body)
@@ -58,13 +72,16 @@ class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebCli
         val ct: MediaType? = headers.contentType
         val raw = entity.body ?: ""
 
-        if (!status.is2xxSuccessful) error("HTTP $status, CT=$ct, Location=${headers.location}, body=${raw.take(800)}")
-        if (raw.isBlank()) error("HTTP $status com corpo vazio. CT=$ct, Location=${headers.location}")
+        if (!status.is2xxSuccessful)
+            error("HTTP $status, CT=$ct, Location=${headers.location}, body=${raw.take(800)}")
+        if (raw.isBlank())
+            error("HTTP $status com corpo vazio. CT=$ct, Location=${headers.location}")
 
         val text = raw.trimStart()
         val looksJson = text.startsWith("{") || text.startsWith("[")
         val isJson = ct?.let { it.isCompatibleWith(MediaType.APPLICATION_JSON) || it.subtype.endsWith("+json") } ?: false
-        if (!isJson && !looksJson) error("Esperava JSON mas veio $ct. Prévia=${text.take(800)}")
+        if (!isJson && !looksJson)
+            error("Esperava JSON mas veio $ct. Prévia=${text.take(800)}")
 
         return mapper.readValue(text)
     }
