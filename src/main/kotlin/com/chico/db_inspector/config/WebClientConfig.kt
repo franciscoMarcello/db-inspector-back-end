@@ -8,20 +8,15 @@ import org.springframework.web.reactive.function.client.WebClient
 
 @Configuration
 class WebClientConfig(
-    @Value("\${dbinspector.sqlExecBaseUrl}") private val baseUrl: String
+    @Value("\${dbinspector.sqlExecBaseUrl}") private val baseUrl: String,
+    @Value("\${dbinspector.apitoken}") private val token: String
 ) {
     @Bean
-    open fun sqlExecWebClient(): WebClient {
-        val exchangeStrategies = ExchangeStrategies.builder()
-            .codecs { config ->
-                // Aumenta o limite de memória de 256 KB para 50 MB
-                config.defaultCodecs().maxInMemorySize(50 * 1024 * 1024)
-            }
-            .build()
-
-        return WebClient.builder()
+    fun sqlExecWebClient(builder: WebClient.Builder): WebClient =
+        builder
             .baseUrl(baseUrl)
-            .exchangeStrategies(exchangeStrategies)
+            .defaultHeader("Accept", "application/json")
+            .defaultHeaders { h -> h.setBearerAuth(token) }
             .build()
-    }
 }
+
