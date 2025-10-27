@@ -2,12 +2,12 @@ package com.chico.dbinspector.controller
 
 import com.chico.db_inspector.model.SqlQuery
 import com.chico.dbinspector.service.SqlExecClient
+
 import com.chico.dbinspector.web.UpstreamContext
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 
-@CrossOrigin(origins = ["http://localhost:4200"])
 @RestController
 @RequestMapping("/api/db")
 class SqlMetadataController(private val sql: SqlExecClient) {
