@@ -15,7 +15,7 @@ class WebClientConfig {
         builder
             .exchangeStrategies(
                 ExchangeStrategies.builder().codecs {
-                    it.defaultCodecs().maxInMemorySize(2 * 1024 * 1024) // 2 MB
+                    it.defaultCodecs().maxInMemorySize(16 * 1024 * 1024)
                 }.build()
             )
             .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
