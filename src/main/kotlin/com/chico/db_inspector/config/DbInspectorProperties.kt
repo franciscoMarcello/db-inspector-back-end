@@ -6,8 +6,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 data class DbInspectorProperties(
     var sqlExecBaseUrl: String = "",
     var apitoken: String = "",
+    var environment: String = "Prod",
     var mail: MailProperties = MailProperties(),
-    var schedule: ScheduleProperties = ScheduleProperties()
+    var schedule: ScheduleProperties = ScheduleProperties(),
+    var reports: ReportsProperties = ReportsProperties()
 ) {
     data class MailProperties(
         var from: String = "no-reply@dbinspector.local"
@@ -18,5 +20,9 @@ data class DbInspectorProperties(
         var attachmentRowLimit: Int = 5_000,
         var attachmentSizeLimitBytes: Long = 5 * 1024 * 1024,
         var sqlTimeoutMs: Long = 15_000
+    )
+
+    data class ReportsProperties(
+        var maxRows: Int = 500
     )
 }

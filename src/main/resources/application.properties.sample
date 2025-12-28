@@ -1,2 +1,24 @@
-dbinspector.sqlExecBaseUrl=url
-dbinspector.apitoken=213123
+spring.mail.host=
+spring.mail.port=
+spring.mail.username=
+spring.mail.password=
+spring.mail.properties.mail.smtp.auth=
+spring.mail.properties.mail.smtp.starttls.enable=
+
+# Datasource (PostgreSQL)
+spring.datasource.url=jdbc:
+spring.datasource.username=
+spring.datasource.password=
+spring.jpa.hibernate.ddl-auto=
+spring.jpa.open-in-view=
+spring.jpa.properties.hibernate.jdbc.lob.non_contextual_creation=
+spring.quartz.job-store-type=
+spring.quartz.jdbc.initialize-schema=
+spring.quartz.properties.org.quartz.jobStore.driverDelegateClass=
+spring.quartz.properties.org.quartz.threadPool.threadCount=
+
+dbinspector.mail.from=
+dbinspector.schedule.preview-limit=
+dbinspector.schedule.attachment-row-limit=
+dbinspector.schedule.attachment-size-limit-bytes=
+dbinspector.schedule.sql-timeout-ms=
