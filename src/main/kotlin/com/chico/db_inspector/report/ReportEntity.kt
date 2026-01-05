@@ -18,11 +18,11 @@ class ReportEntity(
     @GeneratedValue(strategy = GenerationType.UUID)
     var id: UUID? = null,
     @Column(nullable = false)
-    var name: String,
+    var name: String = "",
     @Column(nullable = false)
-    var templateName: String,
+    var templateName: String = "",
     @Column(nullable = false, columnDefinition = "TEXT")
-    var sql: String,
+    var sql: String = "",
     @Column(columnDefinition = "TEXT")
     var description: String? = null,
     @CreationTimestamp

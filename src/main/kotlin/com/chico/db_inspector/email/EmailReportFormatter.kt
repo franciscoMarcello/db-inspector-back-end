@@ -40,10 +40,13 @@ object EmailReportFormatter {
         previewLimit: Int,
         fallbackJson: String
     ): String {
+        val baseStyle = "font-family: Arial, sans-serif; font-size:12px;"
         if (tabular == null || tabular.columns.isEmpty()) {
             return """
-                <p>Pré-visualização JSON:</p>
-                <pre>${escapeHtml(fallbackJson)}</pre>
+                <div style="$baseStyle">
+                  <p>Pré-visualização JSON:</p>
+                  <pre style="font-size:12px;">${escapeHtml(fallbackJson)}</pre>
+                </div>
             """.trimIndent()
         }
         val limitedRows = tabular.rows.take(previewLimit)
@@ -55,12 +58,14 @@ object EmailReportFormatter {
         }
         val moreNote = if (more > 0) "<p>+${more} linha(s) não exibidas no preview.</p>" else ""
         return """
-            <p>Pré-visualização (${limitedRows.size} linha(s))</p>
-            <table border="1" cellpadding="4" cellspacing="0">
-              <thead><tr>$header</tr></thead>
-              <tbody>$body</tbody>
-            </table>
-            $moreNote
+            <div style="$baseStyle">
+              <p>Pré-visualização (${limitedRows.size} linha(s))</p>
+              <table border="1" cellpadding="4" cellspacing="0" style="font-size:12px;">
+                <thead><tr>$header</tr></thead>
+                <tbody>$body</tbody>
+              </table>
+              $moreNote
+            </div>
         """.trimIndent()
     }
 

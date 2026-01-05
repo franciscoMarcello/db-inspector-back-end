@@ -37,6 +37,7 @@ data class ReportSummary(
 )
 
 data class ReportRunResponse(
+    val name: String,
     val meta: ReportRunMeta,
     val query: String,
     val columns: List<String>,

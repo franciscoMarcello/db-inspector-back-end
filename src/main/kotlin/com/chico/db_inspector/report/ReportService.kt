@@ -90,6 +90,7 @@ class ReportService(
         )
 
         return ReportRunResponse(
+            name = entity.name,
             meta = meta,
             query = query,
             columns = columns,

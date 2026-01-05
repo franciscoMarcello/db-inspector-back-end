@@ -6,9 +6,9 @@ spring.mail.properties.mail.smtp.auth=
 spring.mail.properties.mail.smtp.starttls.enable=
 
 # Datasource (PostgreSQL)
-spring.datasource.url=jdbc:
-spring.datasource.username=
-spring.datasource.password=
+spring.datasource.url=
+spring.datasource.username=admin
+spring.datasource.password=melao153
 spring.jpa.hibernate.ddl-auto=
 spring.jpa.open-in-view=
 spring.jpa.properties.hibernate.jdbc.lob.non_contextual_creation=
