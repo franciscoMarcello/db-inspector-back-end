@@ -22,6 +22,8 @@ class ReportFolderEntity(
     var name: String = "",
     @Column(columnDefinition = "TEXT")
     var description: String? = null,
+    @Column(nullable = false)
+    var archived: Boolean = false,
     @OneToMany(mappedBy = "folder", fetch = jakarta.persistence.FetchType.LAZY)
     var reports: MutableList<ReportEntity> = mutableListOf(),
     @CreationTimestamp

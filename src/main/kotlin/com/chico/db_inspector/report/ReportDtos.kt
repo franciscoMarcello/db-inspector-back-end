@@ -13,6 +13,7 @@ data class ReportRequest(
     @field:NotBlank
     val sql: String,
     val description: String? = null,
+    val archived: Boolean? = null,
     val folderId: UUID? = null,
     @field:Valid
     val variables: List<ReportVariableRequest> = emptyList()
@@ -37,6 +38,7 @@ data class ReportResponse(
     val templateName: String,
     val sql: String,
     val description: String?,
+    val archived: Boolean,
     val folder: ReportFolderSummaryResponse?,
     val variables: List<ReportVariableResponse>,
     val createdAt: Long,
@@ -45,7 +47,8 @@ data class ReportResponse(
 
 data class ReportFolderSummaryResponse(
     val id: String,
-    val name: String
+    val name: String,
+    val archived: Boolean
 )
 
 data class ReportVariableResponse(
@@ -88,13 +91,15 @@ data class ReportRunResponse(
 data class ReportFolderRequest(
     @field:NotBlank
     val name: String,
-    val description: String? = null
+    val description: String? = null,
+    val archived: Boolean? = null
 )
 
 data class ReportFolderResponse(
     val id: String,
     val name: String,
     val description: String?,
+    val archived: Boolean,
     val createdAt: Long,
     val updatedAt: Long
 )

@@ -23,7 +23,8 @@ class ReportFolderService(
         }
         val entity = ReportFolderEntity(
             name = folderName,
-            description = request.description?.trim().takeUnless { it.isNullOrBlank() }
+            description = request.description?.trim().takeUnless { it.isNullOrBlank() },
+            archived = request.archived ?: false
         )
         return folderRepository.save(entity).toResponse()
     }
@@ -39,6 +40,7 @@ class ReportFolderService(
         }
         entity.name = folderName
         entity.description = request.description?.trim().takeUnless { it.isNullOrBlank() }
+        request.archived?.let { entity.archived = it }
         return folderRepository.save(entity).toResponse()
     }
 
@@ -59,6 +61,7 @@ class ReportFolderService(
             id = id?.toString() ?: error("id da pasta ausente"),
             name = name,
             description = description,
+            archived = archived,
             createdAt = created.toEpochMilli(),
             updatedAt = updated.toEpochMilli()
         )

@@ -40,6 +40,7 @@ class ReportService(
             templateName = request.templateName.trim(),
             sql = request.sql.trim(),
             description = request.description?.trim().takeUnless { it.isNullOrBlank() },
+            archived = request.archived ?: false,
             folder = resolveFolder(request.folderId)
         )
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
@@ -55,6 +56,7 @@ class ReportService(
         entity.templateName = request.templateName.trim()
         entity.sql = request.sql.trim()
         entity.description = request.description?.trim().takeUnless { it.isNullOrBlank() }
+        request.archived?.let { entity.archived = it }
         entity.folder = resolveFolder(request.folderId)
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
         entity.replaceVariables(normalizeVariables(request.variables))
@@ -142,10 +144,12 @@ class ReportService(
             templateName = templateName,
             sql = sql,
             description = description,
+            archived = archived,
             folder = folder?.let { reportFolder ->
                 ReportFolderSummaryResponse(
                     id = reportFolder.id?.toString() ?: error("id da pasta ausente"),
-                    name = reportFolder.name
+                    name = reportFolder.name,
+                    archived = reportFolder.archived
                 )
             },
             variables = variables

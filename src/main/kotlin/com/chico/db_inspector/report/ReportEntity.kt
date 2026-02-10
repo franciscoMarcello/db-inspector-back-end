@@ -29,6 +29,8 @@ class ReportEntity(
     var sql: String = "",
     @Column(columnDefinition = "TEXT")
     var description: String? = null,
+    @Column(nullable = false)
+    var archived: Boolean = false,
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "folder_id")
     var folder: ReportFolderEntity? = null,
