@@ -4,11 +4,12 @@ spring.mail.username=
 spring.mail.password=
 spring.mail.properties.mail.smtp.auth=
 spring.mail.properties.mail.smtp.starttls.enable=
+spring.mail.properties.mail.smtp.ssl.enable=
 
 # Datasource (PostgreSQL)
 spring.datasource.url=
-spring.datasource.username=admin
-spring.datasource.password=melao153
+spring.datasource.username=
+spring.datasource.password=
 spring.jpa.hibernate.ddl-auto=
 spring.jpa.open-in-view=
 spring.jpa.properties.hibernate.jdbc.lob.non_contextual_creation=
@@ -22,3 +23,5 @@ dbinspector.schedule.preview-limit=
 dbinspector.schedule.attachment-row-limit=
 dbinspector.schedule.attachment-size-limit-bytes=
 dbinspector.schedule.sql-timeout-ms=
+
+CORS_EXTRA_ORIGIN=
