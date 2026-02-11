@@ -1,6 +1,5 @@
 package com.chico.dbinspector.report
 
-import com.chico.dbinspector.web.UpstreamContext
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.DeleteMapping
@@ -14,33 +13,26 @@ import org.springframework.web.bind.annotation.RestController
 import java.util.UUID
 
 @RestController
-@RequestMapping("/api/db/reports")
-class ReportController(
-    private val reportService: ReportService
+@RequestMapping("/api/db/report-folders")
+class ReportFolderController(
+    private val folderService: ReportFolderService
 ) {
     @GetMapping
-    fun list(): List<ReportResponse> = reportService.list()
+    fun list(): List<ReportFolderResponse> = folderService.list()
 
     @PostMapping
-    fun create(@Valid @RequestBody body: ReportRequest): ReportResponse =
-        reportService.create(body)
+    fun create(@Valid @RequestBody body: ReportFolderRequest): ReportFolderResponse =
+        folderService.create(body)
 
     @PutMapping("/{id}")
     fun update(
         @PathVariable id: UUID,
-        @Valid @RequestBody body: ReportRequest
-    ): ReportResponse = reportService.update(id, body)
+        @Valid @RequestBody body: ReportFolderRequest
+    ): ReportFolderResponse = folderService.update(id, body)
 
     @DeleteMapping("/{id}")
     fun delete(@PathVariable id: UUID): ResponseEntity<Void> {
-        reportService.delete(id)
+        folderService.delete(id)
         return ResponseEntity.noContent().build()
     }
-
-    @PostMapping("/{id}/run")
-    fun run(
-        @PathVariable id: UUID,
-        @RequestBody(required = false) body: ReportRunRequest?,
-        ctx: UpstreamContext
-    ): ReportRunResponse = reportService.run(id, ctx, body ?: ReportRunRequest())
 }
