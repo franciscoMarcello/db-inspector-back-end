@@ -7,11 +7,12 @@ import java.util.Optional
 import java.util.UUID
 
 interface ReportRepository : JpaRepository<ReportEntity, UUID> {
-    @EntityGraph(attributePaths = ["variables", "folder"])
+    @EntityGraph(attributePaths = ["variables", "folder", "jasperTemplate"])
     override fun findAll(sort: Sort): List<ReportEntity>
 
-    @EntityGraph(attributePaths = ["variables", "folder"])
+    @EntityGraph(attributePaths = ["variables", "folder", "jasperTemplate"])
     override fun findById(id: UUID): Optional<ReportEntity>
 
     fun existsByFolderId(folderId: UUID): Boolean
+    fun existsByJasperTemplateId(jasperTemplateId: UUID): Boolean
 }

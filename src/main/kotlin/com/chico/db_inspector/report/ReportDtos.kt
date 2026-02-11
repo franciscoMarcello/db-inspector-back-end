@@ -15,6 +15,7 @@ data class ReportRequest(
     val description: String? = null,
     val archived: Boolean? = null,
     val folderId: UUID? = null,
+    val jasperTemplateId: UUID? = null,
     @field:Valid
     val variables: List<ReportVariableRequest> = emptyList()
 )
@@ -40,12 +41,19 @@ data class ReportResponse(
     val description: String?,
     val archived: Boolean,
     val folder: ReportFolderSummaryResponse?,
+    val jasperTemplate: JasperTemplateSummaryResponse?,
     val variables: List<ReportVariableResponse>,
     val createdAt: Long,
     val updatedAt: Long
 )
 
 data class ReportFolderSummaryResponse(
+    val id: String,
+    val name: String,
+    val archived: Boolean
+)
+
+data class JasperTemplateSummaryResponse(
     val id: String,
     val name: String,
     val archived: Boolean
@@ -76,7 +84,8 @@ data class ReportSummary(
 )
 
 data class ReportRunRequest(
-    val params: Map<String, Any?> = emptyMap()
+    val params: Map<String, Any?> = emptyMap(),
+    val safe: Boolean = false
 )
 
 data class ReportRunResponse(
@@ -99,6 +108,25 @@ data class ReportFolderResponse(
     val id: String,
     val name: String,
     val description: String?,
+    val archived: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+data class JasperTemplateRequest(
+    @field:NotBlank
+    val name: String,
+    val description: String? = null,
+    @field:NotBlank
+    val jrxml: String,
+    val archived: Boolean? = null
+)
+
+data class JasperTemplateResponse(
+    val id: String,
+    val name: String,
+    val description: String?,
+    val jrxml: String,
     val archived: Boolean,
     val createdAt: Long,
     val updatedAt: Long

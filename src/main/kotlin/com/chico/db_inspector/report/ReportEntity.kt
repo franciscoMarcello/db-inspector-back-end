@@ -34,6 +34,9 @@ class ReportEntity(
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "folder_id")
     var folder: ReportFolderEntity? = null,
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "jasper_template_id")
+    var jasperTemplate: ReportJasperTemplateEntity? = null,
     @OneToMany(mappedBy = "report", cascade = [jakarta.persistence.CascadeType.ALL], orphanRemoval = true, fetch = FetchType.LAZY)
     @org.hibernate.annotations.BatchSize(size = 100)
     var variables: MutableList<ReportVariableEntity> = mutableListOf(),
