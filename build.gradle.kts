@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.chico"
-version = "0.0.1-SNAPSHOT"
+version = "1.4.0"
 description = "extação agrodog"
 
 java {
