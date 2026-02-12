@@ -4,9 +4,11 @@ import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.email.EmailReportFormatter
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
+import net.sf.jasperreports.engine.DefaultJasperReportsContext
 import net.sf.jasperreports.engine.JRField
 import net.sf.jasperreports.engine.JRException
 import net.sf.jasperreports.engine.JRParameter
+import net.sf.jasperreports.engine.JRPropertiesUtil
 import net.sf.jasperreports.engine.JasperCompileManager
 import net.sf.jasperreports.engine.JasperExportManager
 import net.sf.jasperreports.engine.JasperFillManager
@@ -42,6 +44,7 @@ class ReportService(
 ) {
     companion object {
         private const val LOGO_RESOURCE_PATH = "reports/logo.png"
+        private const val JASPER_JDT_COMPILER = "net.sf.jasperreports.jdt.JRJdtCompiler"
     }
 
     private val log = LoggerFactory.getLogger(ReportService::class.java)
@@ -141,6 +144,7 @@ class ReportService(
         val templateBytes = sanitizedJrxml.toByteArray(StandardCharsets.UTF_8)
 
         try {
+            configureJasperCompiler()
             val compileStart = System.nanoTime()
             val jasperReport = ByteArrayInputStream(templateBytes).use { input ->
                 JasperCompileManager.compileReport(input)
@@ -542,6 +546,13 @@ class ReportService(
         }
 
         return result
+    }
+
+    private fun configureJasperCompiler() {
+        val context = DefaultJasperReportsContext.getInstance()
+        val properties = JRPropertiesUtil.getInstance(context)
+        properties.setProperty("net.sf.jasperreports.compiler.class", JASPER_JDT_COMPILER)
+        properties.setProperty("net.sf.jasperreports.compiler.java", JASPER_JDT_COMPILER)
     }
 
     private fun loadLogoBytes(): ByteArray? {
