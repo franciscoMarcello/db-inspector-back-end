@@ -44,6 +44,9 @@ class ReportService(
     private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val dateTimeSqlFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val allowedVariableTypes = setOf("string", "number", "date", "datetime", "boolean")
+    private val optionColumnValor = "valor"
+    private val optionColumnDescricao = "descricao"
+    private val defaultFilterOptionsLimit = 100
 
     fun list(): List<ReportResponse> =
         repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
@@ -212,6 +215,42 @@ class ReportService(
         }
     }
 
+    fun listVariableOptions(
+        reportId: UUID,
+        variableKey: String,
+        ctx: UpstreamContext,
+        request: ReportVariableOptionsRequest
+    ): List<ReportVariableOptionResponse> {
+        val entity = repository.findById(reportId).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        val variable = entity.variables.firstOrNull { it.key.equals(variableKey, ignoreCase = true) }
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Variavel '$variableKey' nao encontrada")
+        return try {
+            val optionsSql = normalizeOptionsSql(variable.optionsSql)
+            val query = buildQueryWithParams(optionsSql, entity.variables, request.params, enforceRequired = false)
+            val result = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, query, true, true)
+            val rows = extractOptionRows(result)
+
+            if (rows.isEmpty()) {
+                extractOptionColumnsFromDescription(result)?.let { validateOptionColumns(it) }
+                return emptyList()
+            }
+
+            val columns = validateOptionColumns(rows.first().keys)
+            val limit = (request.limit ?: defaultFilterOptionsLimit).coerceIn(1, properties.reports.maxRows)
+
+            rows.take(limit).map { row ->
+                ReportVariableOptionResponse(
+                    valor = row[columns.valor],
+                    descricao = row[columns.descricao]?.toString() ?: ""
+                )
+            }
+        } catch (ex: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, ex.message ?: "Erro de validacao", ex)
+        }
+    }
+
     private fun computeSummaries(columns: List<String>, rows: List<Map<String, Any?>>): List<ReportSummary> =
         columns.mapNotNull { column ->
             var sum = 0.0
@@ -267,6 +306,7 @@ class ReportService(
                         type = variable.type,
                         required = variable.required,
                         defaultValue = variable.defaultValue,
+                        optionsSql = variable.optionsSql,
                         orderIndex = variable.orderIndex
                     )
                 },
@@ -319,7 +359,8 @@ class ReportService(
     private fun buildQueryWithParams(
         queryTemplate: String,
         variables: List<ReportVariableEntity>,
-        params: Map<String, Any?>
+        params: Map<String, Any?>,
+        enforceRequired: Boolean = true
     ): String {
         if (variables.isEmpty()) return queryTemplate
 
@@ -329,7 +370,7 @@ class ReportService(
 
         var rendered = queryTemplate
         variables.forEach { variable ->
-            val rawValue = resolveVariableValue(variable, params)
+            val rawValue = resolveVariableValue(variable, params, enforceRequired)
             val sqlLiteral = toSqlLiteral(variable, rawValue)
             val placeholder = Regex("(?<!:):${Regex.escape(variable.key)}\\b")
             rendered = rendered.replace(placeholder, sqlLiteral)
@@ -337,17 +378,78 @@ class ReportService(
         return rendered
     }
 
-    private fun resolveVariableValue(variable: ReportVariableEntity, params: Map<String, Any?>): Any? {
+    private fun resolveVariableValue(
+        variable: ReportVariableEntity,
+        params: Map<String, Any?>,
+        enforceRequired: Boolean
+    ): Any? {
         if (params.containsKey(variable.key)) {
             return params[variable.key]
         }
         if (!variable.defaultValue.isNullOrBlank()) {
             return variable.defaultValue
         }
-        if (variable.required) {
+        if (variable.required && enforceRequired) {
             throw IllegalArgumentException("Parametro obrigatorio ausente: '${variable.key}'")
         }
         return null
+    }
+
+    private fun normalizeOptionsSql(optionsSql: String?): String {
+        val query = optionsSql?.trim().orEmpty()
+        if (query.isBlank()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Variavel sem SQL de opcoes configurado")
+        }
+
+        val withoutTrailingSemicolon = query.removeSuffix(";").trim()
+        require(withoutTrailingSemicolon.isNotBlank()) { "SQL de opcoes nao pode ser vazio" }
+        require(!withoutTrailingSemicolon.contains(";")) { "SQL de opcoes deve conter apenas uma consulta" }
+        val startsLikeSelect = withoutTrailingSemicolon.startsWith("select", ignoreCase = true) ||
+            withoutTrailingSemicolon.startsWith("with", ignoreCase = true)
+        require(startsLikeSelect) { "SQL de opcoes deve comecar com SELECT ou WITH" }
+        require(
+            !Regex("\\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(withoutTrailingSemicolon)
+        ) { "SQL de opcoes deve ser somente leitura" }
+
+        return withoutTrailingSemicolon
+    }
+
+    private fun extractOptionRows(result: Map<String, Any?>): List<Map<String, Any?>> {
+        val data = result["data"] as? List<*> ?: return emptyList()
+        if (data.isEmpty()) return emptyList()
+        return data.mapIndexed { index, raw ->
+            val map = raw as? Map<*, *> ?: throw IllegalArgumentException(
+                "Linha ${index + 1} do SQL de opcoes nao esta no formato objeto"
+            )
+            map.entries
+                .filter { it.key is String }
+                .associate { (key, value) -> key as String to value }
+        }
+    }
+
+    private fun extractOptionColumnsFromDescription(result: Map<String, Any?>): Set<String>? {
+        val description = result["description"] as? List<*> ?: return null
+        val keys = description.mapNotNull { raw ->
+            val column = raw as? Map<*, *> ?: return@mapNotNull null
+            val name = column["name"] ?: column["column_name"] ?: column["columnName"] ?: column["field"]
+            name?.toString()
+        }.toSet()
+        return keys.takeIf { it.isNotEmpty() }
+    }
+
+    private fun validateOptionColumns(columns: Collection<String>): OptionColumns {
+        require(columns.size == 2) {
+            "SQL de opcoes deve retornar exatamente 2 colunas: valor e descricao"
+        }
+
+        val valorKey = columns.firstOrNull { it.equals(optionColumnValor, ignoreCase = true) }
+        val descricaoKey = columns.firstOrNull { it.equals(optionColumnDescricao, ignoreCase = true) }
+        require(valorKey != null && descricaoKey != null) {
+            "SQL de opcoes deve retornar as colunas 'valor' e 'descricao'"
+        }
+
+        return OptionColumns(valor = valorKey, descricao = descricaoKey)
     }
 
     private fun toSqlLiteral(variable: ReportVariableEntity, rawValue: Any?): String {
@@ -563,8 +665,14 @@ class ReportService(
                 type = type,
                 required = variable.required,
                 defaultValue = variable.defaultValue?.trim().takeUnless { it.isNullOrBlank() },
+                optionsSql = variable.optionsSql?.trim().takeUnless { it.isNullOrBlank() },
                 orderIndex = variable.orderIndex ?: index
             )
         }
     }
+
+    private data class OptionColumns(
+        val valor: String,
+        val descricao: String
+    )
 }

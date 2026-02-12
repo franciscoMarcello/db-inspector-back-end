@@ -30,6 +30,7 @@ data class ReportVariableRequest(
     val type: String,
     val required: Boolean = true,
     val defaultValue: String? = null,
+    val optionsSql: String? = null,
     val orderIndex: Int? = null
 )
 
@@ -66,7 +67,18 @@ data class ReportVariableResponse(
     val type: String,
     val required: Boolean,
     val defaultValue: String?,
+    val optionsSql: String?,
     val orderIndex: Int
+)
+
+data class ReportVariableOptionsRequest(
+    val params: Map<String, Any?> = emptyMap(),
+    val limit: Int? = null
+)
+
+data class ReportVariableOptionResponse(
+    val valor: Any?,
+    val descricao: String
 )
 
 data class ReportRunMeta(

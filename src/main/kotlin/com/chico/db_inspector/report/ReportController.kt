@@ -59,4 +59,15 @@ class ReportController(
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"report-$id.pdf\"")
             .body(pdfBytes)
     }
+
+    @PostMapping("/{id}/variables/{key}/options")
+    fun variableOptions(
+        @PathVariable id: UUID,
+        @PathVariable key: String,
+        @RequestBody(required = false) body: ReportVariableOptionsRequest?,
+        ctx: UpstreamContext
+    ): List<ReportVariableOptionResponse> {
+        val payload = body ?: ReportVariableOptionsRequest()
+        return reportService.listVariableOptions(id, key, ctx, payload)
+    }
 }

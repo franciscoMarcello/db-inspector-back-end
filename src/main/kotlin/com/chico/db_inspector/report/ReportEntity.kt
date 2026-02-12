@@ -60,6 +60,7 @@ class ReportEntity(
             target.type = incoming.type
             target.required = incoming.required
             target.defaultValue = incoming.defaultValue
+            target.optionsSql = incoming.optionsSql
             target.orderIndex = incoming.orderIndex
             target.report = this
 
