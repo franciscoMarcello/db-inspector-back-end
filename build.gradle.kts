@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.chico"
-version = "1.4.2"
+version = "1.4.3"
 description = "extação agrodog"
 
 java {
@@ -28,6 +28,7 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-quartz")
 	implementation("net.sf.jasperreports:jasperreports:7.0.3")
 	implementation("net.sf.jasperreports:jasperreports-pdf:7.0.3")
+	implementation("net.sf.jasperreports:jasperreports-jdt:7.0.3")
 	implementation("org.eclipse.jdt:ecj:3.38.0")
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 	implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")
