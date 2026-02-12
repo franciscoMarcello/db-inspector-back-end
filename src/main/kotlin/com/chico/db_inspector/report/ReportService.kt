@@ -40,6 +40,10 @@ class ReportService(
     private val properties: DbInspectorProperties,
     private val clock: Clock = Clock.systemDefaultZone()
 ) {
+    companion object {
+        private const val LOGO_RESOURCE_PATH = "reports/logo.png"
+    }
+
     private val log = LoggerFactory.getLogger(ReportService::class.java)
     private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val dateTimeSqlFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -153,6 +157,7 @@ class ReportService(
 
             val dataSource = JRMapCollectionDataSource(dataRows)
             val coerceParamsStart = System.nanoTime()
+            val logoBytes = loadLogoBytes()
             val jasperParams = mutableMapOf<String, Any?>(
                 "REPORT_NAME" to entity.name,
                 "REPORT_QUERY" to execution.query
@@ -161,6 +166,10 @@ class ReportService(
                     putAll(coerceParamsForTemplate(request.params, jasperReport.parameters))
                 } else {
                     putAll(request.params)
+                }
+                if (logoBytes != null) {
+                    put("LOGO_STREAM", ByteArrayInputStream(logoBytes))
+                    put("LOGO_URL", this@ReportService::class.java.classLoader.getResource(LOGO_RESOURCE_PATH)?.toExternalForm())
                 }
             }
             val coerceParamsMs = (System.nanoTime() - coerceParamsStart) / 1_000_000
@@ -533,6 +542,15 @@ class ReportService(
         }
 
         return result
+    }
+
+    private fun loadLogoBytes(): ByteArray? {
+        val stream = this::class.java.classLoader.getResourceAsStream(LOGO_RESOURCE_PATH)
+        if (stream == null) {
+            log.warn("Logo fixa nao encontrada em classpath: {}", LOGO_RESOURCE_PATH)
+            return null
+        }
+        return stream.use { it.readBytes() }
     }
 
     private fun coerceRowsForTemplate(
