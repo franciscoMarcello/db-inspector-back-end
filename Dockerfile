@@ -6,7 +6,7 @@ RUN ./gradlew assemble
 RUN rm /workspace/app/build/libs/*-plain.jar> /dev/null
 RUN java -Djarmode=layertools -jar /workspace/app/build/libs/*.jar extract --destination /extracted
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21-jdk
 VOLUME /tmp
 ARG EXTRACTED=/extracted
 WORKDIR /app
@@ -18,4 +18,3 @@ COPY --from=build ${EXTRACTED}/spring-boot-loader/ ./
 COPY --from=build ${EXTRACTED}/snapshot-dependencies/ ./
 COPY --from=build ${EXTRACTED}/application/ ./
 ENTRYPOINT ["java", "-Duser.home=/app", "org.springframework.boot.loader.launch.JarLauncher"]
-

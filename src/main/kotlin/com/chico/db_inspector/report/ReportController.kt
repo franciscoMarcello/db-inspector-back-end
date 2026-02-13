@@ -2,6 +2,8 @@ package com.chico.dbinspector.report
 
 import com.chico.dbinspector.web.UpstreamContext
 import jakarta.validation.Valid
+import org.springframework.http.HttpHeaders
+import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
@@ -43,4 +45,29 @@ class ReportController(
         @RequestBody(required = false) body: ReportRunRequest?,
         ctx: UpstreamContext
     ): ReportRunResponse = reportService.run(id, ctx, body ?: ReportRunRequest())
+
+    @PostMapping("/{id}/pdf")
+    fun pdf(
+        @PathVariable id: UUID,
+        @RequestBody(required = false) body: ReportRunRequest?,
+        ctx: UpstreamContext
+    ): ResponseEntity<ByteArray> {
+        val payload = body ?: ReportRunRequest()
+        val pdfBytes = reportService.generatePdf(id, ctx, payload)
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_PDF)
+            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"report-$id.pdf\"")
+            .body(pdfBytes)
+    }
+
+    @PostMapping("/{id}/variables/{key}/options")
+    fun variableOptions(
+        @PathVariable id: UUID,
+        @PathVariable key: String,
+        @RequestBody(required = false) body: ReportVariableOptionsRequest?,
+        ctx: UpstreamContext
+    ): List<ReportVariableOptionResponse> {
+        val payload = body ?: ReportVariableOptionsRequest()
+        return reportService.listVariableOptions(id, key, ctx, payload)
+    }
 }
