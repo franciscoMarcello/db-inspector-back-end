@@ -1,0 +1,153 @@
+package com.chico.dbinspector.report
+
+import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.service.SqlExecClient
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Test
+import org.mockito.Mockito
+import org.springframework.http.HttpStatus
+import org.springframework.web.reactive.function.client.ClientResponse
+import org.springframework.web.reactive.function.client.ExchangeFunction
+import org.springframework.web.reactive.function.client.WebClient
+import reactor.core.publisher.Mono
+import java.lang.reflect.InvocationTargetException
+
+class ReportServiceQueryTemplateTest {
+
+    @Test
+    fun `buildQueryWithParams should replace placeholders with SQL literals`() {
+        val service = createService()
+        val variables = listOf(
+            ReportVariableEntity(key = "name", label = "Name", type = "string", required = true, orderIndex = 0),
+            ReportVariableEntity(key = "active", label = "Active", type = "boolean", required = true, orderIndex = 1),
+            ReportVariableEntity(key = "amount", label = "Amount", type = "number", required = true, orderIndex = 2),
+            ReportVariableEntity(key = "day", label = "Day", type = "date", required = true, orderIndex = 3)
+        )
+
+        val rendered = invokeBuildQueryWithParams(
+            service = service,
+            queryTemplate = "SELECT * FROM t WHERE name = :name AND active = :active AND amount = :amount AND day = :day",
+            variables = variables,
+            params = mapOf(
+                "name" to "O'Reilly",
+                "active" to "true",
+                "amount" to "10.50",
+                "day" to "2026-02-17"
+            ),
+            enforceRequired = true
+        )
+
+        assertEquals(
+            "SELECT * FROM t WHERE name = 'O''Reilly' AND active = true AND amount = 10.50 AND day = '2026-02-17'",
+            rendered
+        )
+    }
+
+    @Test
+    fun `buildQueryWithParams should fail for unknown params`() {
+        val service = createService()
+        val variables = listOf(
+            ReportVariableEntity(key = "name", label = "Name", type = "string", required = true, orderIndex = 0)
+        )
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            invokeBuildQueryWithParams(
+                service = service,
+                queryTemplate = "SELECT * FROM t WHERE name = :name",
+                variables = variables,
+                params = mapOf("unknown" to "x"),
+                enforceRequired = true
+            )
+        }
+
+        assertEquals("Parametros desconhecidos: unknown", ex.message)
+    }
+
+    @Test
+    fun `buildQueryWithParams should fail when required param is missing`() {
+        val service = createService()
+        val variables = listOf(
+            ReportVariableEntity(key = "name", label = "Name", type = "string", required = true, orderIndex = 0)
+        )
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            invokeBuildQueryWithParams(
+                service = service,
+                queryTemplate = "SELECT * FROM t WHERE name = :name",
+                variables = variables,
+                params = emptyMap(),
+                enforceRequired = true
+            )
+        }
+
+        assertEquals("Parametro obrigatorio ausente: 'name'", ex.message)
+    }
+
+    @Test
+    fun `buildQueryWithParams should use default value when param is omitted`() {
+        val service = createService()
+        val variables = listOf(
+            ReportVariableEntity(
+                key = "status",
+                label = "Status",
+                type = "string",
+                required = false,
+                defaultValue = "OPEN",
+                orderIndex = 0
+            )
+        )
+
+        val rendered = invokeBuildQueryWithParams(
+            service = service,
+            queryTemplate = "SELECT * FROM t WHERE status = :status",
+            variables = variables,
+            params = emptyMap(),
+            enforceRequired = true
+        )
+
+        assertEquals("SELECT * FROM t WHERE status = 'OPEN'", rendered)
+    }
+
+    private fun createService(): ReportService {
+        val reportRepository = Mockito.mock(ReportRepository::class.java)
+        val folderRepository = Mockito.mock(ReportFolderRepository::class.java)
+        val jasperTemplateRepository = Mockito.mock(ReportJasperTemplateRepository::class.java)
+        val sqlExecClient = SqlExecClient(
+            WebClient.builder()
+                .exchangeFunction(ExchangeFunction { Mono.just(ClientResponse.create(HttpStatus.INTERNAL_SERVER_ERROR).build()) })
+                .build()
+        )
+
+        return ReportService(
+            repository = reportRepository,
+            folderRepository = folderRepository,
+            jasperTemplateRepository = jasperTemplateRepository,
+            sqlExecClient = sqlExecClient,
+            properties = DbInspectorProperties()
+        )
+    }
+
+    private fun invokeBuildQueryWithParams(
+        service: ReportService,
+        queryTemplate: String,
+        variables: List<ReportVariableEntity>,
+        params: Map<String, Any?>,
+        enforceRequired: Boolean
+    ): String {
+        val method = ReportService::class.java.getDeclaredMethod(
+            "buildQueryWithParams",
+            String::class.java,
+            List::class.java,
+            Map::class.java,
+            Boolean::class.javaPrimitiveType
+        )
+        method.isAccessible = true
+
+        try {
+            return method.invoke(service, queryTemplate, variables, params, enforceRequired) as String
+        } catch (ex: InvocationTargetException) {
+            throw ex.targetException
+        }
+    }
+}

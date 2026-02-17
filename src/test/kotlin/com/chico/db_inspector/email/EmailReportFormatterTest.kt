@@ -3,6 +3,7 @@ package com.chico.dbinspector.email
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class EmailReportFormatterTest {
@@ -31,8 +32,13 @@ class EmailReportFormatterTest {
         )
         val html = EmailReportFormatter.buildHtmlPreview(tabular, previewLimit = 3, fallbackJson = "{}")
 
-        // Preview should contain only first 3 rows rendered and mention more rows
-        val rowCount = "<tr>".toRegex().findAll(html).count()
+        // Count only rendered data rows in tbody; thead has its own <tr>
+        val tbody = "<tbody>(.*?)</tbody>".toRegex(setOf(RegexOption.DOT_MATCHES_ALL))
+            .find(html)
+            ?.groupValues
+            ?.get(1)
+        assertTrue(tbody != null)
+        val rowCount = "<tr>".toRegex().findAll(tbody!!).count()
         assertEquals(3, rowCount)
         assert(html.contains("+2 linha(s)"))
     }
