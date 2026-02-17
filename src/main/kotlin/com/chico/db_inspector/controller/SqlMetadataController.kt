@@ -2,7 +2,6 @@ package com.chico.dbinspector.controller
 
 import com.chico.db_inspector.model.SqlQuery
 import com.chico.dbinspector.service.SqlExecClient
-
 import com.chico.dbinspector.web.UpstreamContext
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -11,6 +10,10 @@ import org.springframework.web.bind.annotation.*
 @RestController
 @RequestMapping("/api/db")
 class SqlMetadataController(private val sql: SqlExecClient) {
+    companion object {
+        private const val DEFAULT_PAGE_SIZE = 200
+        private const val MAX_PAGE_SIZE = 1_000
+    }
 
     @GetMapping("/schemas", produces = [MediaType.APPLICATION_JSON_VALUE])
     fun listSchemas(ctx: UpstreamContext): Any {
@@ -116,7 +119,42 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     @PostMapping("/query", consumes = [MediaType.APPLICATION_JSON_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
     fun runQuery(@RequestBody body: SqlQuery, ctx: UpstreamContext): ResponseEntity<Any> {
         val q = body.query.trim()
+        require(q.isNotEmpty()) { "SQL nao pode ser vazia" }
+
+        val page = (body.page ?: 0).coerceAtLeast(0)
+        val size = (body.size ?: DEFAULT_PAGE_SIZE).coerceIn(1, MAX_PAGE_SIZE)
+        val paginatedQuery = toPaginatedSelect(q, size, page * size)
+
+        val result = sql.exec(
+            ctx.endpointUrl,
+            ctx.bearer,
+            paginatedQuery,
+            body.asDict ?: true,
+            body.withDescription ?: true
+        )
+        val payload = linkedMapOf<String, Any?>(
+            "page" to page,
+            "size" to size,
+            "query" to paginatedQuery
+        )
+        payload.putAll(result)
+        return ResponseEntity.ok(payload)
+    }
+
+    @PostMapping("/query/all", consumes = [MediaType.APPLICATION_JSON_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun runQueryAll(@RequestBody body: SqlQuery, ctx: UpstreamContext): ResponseEntity<Any> {
+        val q = body.query.trim()
+        require(q.isNotEmpty()) { "SQL nao pode ser vazia" }
         val result = sql.exec(ctx.endpointUrl, ctx.bearer, q, body.asDict ?: true, body.withDescription ?: true)
         return ResponseEntity.ok(result)
+    }
+
+    private fun toPaginatedSelect(rawQuery: String, limit: Int, offset: Int): String {
+        val query = rawQuery.trim().trimEnd(';').trim()
+        require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+        val startsLikeReadOnly = query.startsWith("select", ignoreCase = true) ||
+            query.startsWith("with", ignoreCase = true)
+        require(startsLikeReadOnly) { "Paginacao disponivel apenas para SELECT/WITH. Use /query/all para outros comandos" }
+        return "SELECT * FROM ($query) dbi_paginated LIMIT $limit OFFSET $offset"
     }
 }
