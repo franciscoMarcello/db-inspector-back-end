@@ -23,5 +23,6 @@ dbinspector.schedule.preview-limit=
 dbinspector.schedule.attachment-row-limit=
 dbinspector.schedule.attachment-size-limit-bytes=
 dbinspector.schedule.sql-timeout-ms=
+dbinspector.schedule.time-zone=America/Porto_Velho
 
 CORS_EXTRA_ORIGIN=

@@ -19,7 +19,8 @@ data class DbInspectorProperties(
         var previewLimit: Int = 200,
         var attachmentRowLimit: Int = 5_000,
         var attachmentSizeLimitBytes: Long = 5 * 1024 * 1024,
-        var sqlTimeoutMs: Long = 15_000
+        var sqlTimeoutMs: Long = 15_000,
+        var timeZone: String = "America/Porto_Velho"
     )
 
     data class ReportsProperties(
