@@ -1,5 +1,6 @@
 package com.chico.dbinspector.email
 
+import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
 import org.quartz.CronScheduleBuilder
@@ -12,8 +13,8 @@ import org.quartz.TriggerKey
 import org.quartz.impl.matchers.GroupMatcher
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import java.time.Clock
 import java.time.DayOfWeek
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.TimeZone
 import java.util.UUID
@@ -29,9 +30,17 @@ class EmailReportScheduler(
     private val scheduler: Scheduler,
     private val sqlExecClient: SqlExecClient,
     private val emailService: EmailReportService,
-    private val clock: Clock = Clock.systemDefaultZone()
+    private val properties: DbInspectorProperties
 ) {
     private val log = LoggerFactory.getLogger(EmailReportScheduler::class.java)
+    private val scheduleZone: ZoneId = runCatching { ZoneId.of(properties.schedule.timeZone.trim()) }
+        .getOrElse {
+            log.warn(
+                "Timezone invalido em dbinspector.schedule.time-zone='{}'. Usando America/Porto_Velho",
+                properties.schedule.timeZone
+            )
+            ZoneId.of("America/Porto_Velho")
+        }
     private val dayOfWeekAlias = mapOf(
         "mon" to DayOfWeek.MONDAY,
         "tue" to DayOfWeek.TUESDAY,
@@ -108,7 +117,7 @@ class EmailReportScheduler(
             .forJob(detail)
             .withSchedule(
                 CronScheduleBuilder.cronSchedule(cron)
-                    .inTimeZone(TimeZone.getTimeZone(clock.zone))
+                    .inTimeZone(TimeZone.getTimeZone(scheduleZone))
             )
             .build()
         scheduler.rescheduleJob(triggerKey, trigger)
@@ -158,7 +167,7 @@ class EmailReportScheduler(
             .forJob(jobDetail)
             .withSchedule(
                 CronScheduleBuilder.cronSchedule(cron)
-                    .inTimeZone(TimeZone.getTimeZone(clock.zone))
+                    .inTimeZone(TimeZone.getTimeZone(scheduleZone))
             )
             .build()
 
@@ -170,7 +179,7 @@ class EmailReportScheduler(
             ?: EmailScheduleResponse(
                 id = id,
                 cron = cron,
-                nextRun = nextRunInstant?.toInstant()?.atZone(clock.zone)?.toString(),
+                nextRun = nextRunInstant?.toInstant()?.atZone(scheduleZone)?.toString(),
                 status = "NORMAL",
                 time = body.time ?: "",
                 days = days.map { it.name },
@@ -218,7 +227,7 @@ class EmailReportScheduler(
     private fun toScheduleResponse(detail: org.quartz.JobDetail, trigger: Trigger?): EmailScheduleResponse? {
         val data = detail.jobDataMap
         val cron = (trigger as? org.quartz.CronTrigger)?.cronExpression ?: ""
-        val nextRun = trigger?.nextFireTime?.toInstant()?.atZone(clock.zone)?.toString()
+        val nextRun = trigger?.nextFireTime?.toInstant()?.atZone(scheduleZone)?.toString()
         val status = trigger?.let { scheduler.getTriggerState(it.key).name } ?: "NONE"
         return EmailScheduleResponse(
             id = detail.key.name,
