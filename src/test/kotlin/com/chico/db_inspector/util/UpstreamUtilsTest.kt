@@ -67,6 +67,6 @@ class UpstreamUtilsTest {
             UpstreamUtils.resolveBearer(authorization = null, apiToken = null)
         }
 
-        assertEquals("Token ausente: Authorization Bearer ou X-API-Token", ex.message)
+        assertEquals("Token upstream ausente: X-Upstream-Authorization Bearer ou X-API-Token", ex.message)
     }
 }

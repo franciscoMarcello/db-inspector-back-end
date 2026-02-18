@@ -15,6 +15,8 @@ import java.util.UUID
 @Service
 class AuthService(
     private val userRepository: AppUserRepository,
+    private val userRoleRepository: UserRoleRepository,
+    private val rolePermissionRepository: RolePermissionRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
     private val jwtService: JwtService,
     private val authenticationManager: AuthenticationManager
@@ -68,11 +70,7 @@ class AuthService(
     fun me(authentication: Authentication): AuthUserResponse {
         val principal = authentication.principal as? AuthUserPrincipal
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Nao autenticado")
-
-        return AuthUserResponse(
-            id = principal.userId.toString(),
-            email = principal.username
-        )
+        return toAuthUserResponse(principal.userId, principal.username)
     }
 
     @Transactional
@@ -97,10 +95,31 @@ class AuthService(
             accessToken = accessToken,
             expiresInSeconds = expiresIn.coerceAtLeast(0),
             refreshToken = refreshPayload.rawToken,
-            user = AuthUserResponse(
-                id = userId.toString(),
-                email = user.email
-            )
+            user = toAuthUserResponse(userId, user.email)
+        )
+    }
+
+    private fun toAuthUserResponse(userId: UUID, email: String): AuthUserResponse {
+        val roleNames = userRoleRepository.findRoleNamesByUserId(userId)
+            .map { it.uppercase() }
+            .distinct()
+            .sorted()
+
+        val roleIds = userRoleRepository.findRoleIdsByUserId(userId).toSet()
+        val permissions = if (roleIds.isEmpty()) {
+            emptyList()
+        } else {
+            rolePermissionRepository.findPermissionCodesByRoleIds(roleIds)
+                .map { it.uppercase() }
+                .distinct()
+                .sorted()
+        }
+
+        return AuthUserResponse(
+            id = userId.toString(),
+            email = email,
+            roles = roleNames,
+            permissions = permissions
         )
     }
 }
@@ -151,25 +170,32 @@ class AuthBootstrap(
 ) : org.springframework.boot.CommandLineRunner {
     @Transactional
     override fun run(vararg args: String?) {
-        val adminRole = roleRepository.findByNameIgnoreCase("ADMIN")
-            .orElseGet { roleRepository.save(RoleEntity(name = "ADMIN")) }
-
         val permissions = PermissionCodes.all.map { code ->
             permissionRepository.findByCode(code)
                 .orElseGet { permissionRepository.save(PermissionEntity(code = code)) }
         }
-        permissions.forEach { permission ->
-            val permissionId = permission.id ?: error("Permissao sem id")
-            val roleId = adminRole.id ?: error("Role sem id")
-            if (!rolePermissionRepository.existsByRoleIdAndPermissionId(roleId, permissionId)) {
-                rolePermissionRepository.save(
-                    RolePermissionEntity(
-                        role = adminRole,
-                        permission = permission
-                    )
-                )
-            }
-        }
+        val permissionByCode = permissions.associateBy { it.code.uppercase() }
+
+        val adminRole = ensureRoleWithPermissions(
+            roleName = "ADMIN",
+            permissionCodes = PermissionCodes.all,
+            permissionByCode = permissionByCode
+        )
+
+        ensureRoleWithPermissions(
+            roleName = "USER",
+            permissionCodes = listOf(
+                PermissionCodes.REPORT_READ,
+                PermissionCodes.REPORT_RUN,
+                PermissionCodes.FOLDER_READ,
+                PermissionCodes.TEMPLATE_READ,
+                PermissionCodes.SQL_METADATA_READ,
+                PermissionCodes.EMAIL_SEND,
+                PermissionCodes.EMAIL_TEST,
+                PermissionCodes.EMAIL_SCHEDULE_READ
+            ),
+            permissionByCode = permissionByCode
+        )
 
         val email = adminEmail.trim().lowercase()
         val password = adminPassword.trim()
@@ -195,5 +221,31 @@ class AuthBootstrap(
                 )
             )
         }
+    }
+
+    private fun ensureRoleWithPermissions(
+        roleName: String,
+        permissionCodes: List<String>,
+        permissionByCode: Map<String, PermissionEntity>
+    ): RoleEntity {
+        val role = roleRepository.findByNameIgnoreCase(roleName)
+            .orElseGet { roleRepository.save(RoleEntity(name = roleName.uppercase())) }
+        val roleId = role.id ?: error("Role sem id")
+
+        permissionCodes.forEach { code ->
+            val permission = permissionByCode[code.uppercase()]
+                ?: error("Permissao '$code' nao encontrada")
+            val permissionId = permission.id ?: error("Permissao sem id")
+            if (!rolePermissionRepository.existsByRoleIdAndPermissionId(roleId, permissionId)) {
+                rolePermissionRepository.save(
+                    RolePermissionEntity(
+                        role = role,
+                        permission = permission
+                    )
+                )
+            }
+        }
+
+        return role
     }
 }

@@ -33,5 +33,13 @@ class CorsMvcConfig(
             .exposedHeaders("Location")
             .allowCredentials(true)
             .maxAge(3600)
+
+        reg.addMapping("/api/admin/**")
+            .allowedOrigins(*allowedOrigins.toTypedArray())
+            .allowedMethods("GET","POST","PUT","PATCH","DELETE","OPTIONS")
+            .allowedHeaders("Authorization","Content-Type","Accept","X-Requested-With")
+            .exposedHeaders("Location")
+            .allowCredentials(true)
+            .maxAge(3600)
     }
 }

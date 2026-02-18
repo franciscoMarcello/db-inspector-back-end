@@ -11,6 +11,7 @@ interface AppUserRepository : JpaRepository<AppUserEntity, UUID> {
 
 interface RoleRepository : JpaRepository<RoleEntity, UUID> {
     fun findByNameIgnoreCase(name: String): Optional<RoleEntity>
+    fun findAllByOrderByNameAsc(): List<RoleEntity>
 }
 
 interface PermissionRepository : JpaRepository<PermissionEntity, UUID> {
@@ -37,6 +38,9 @@ interface UserRoleRepository : JpaRepository<UserRoleEntity, UUID> {
     fun findRoleIdsByUserId(userId: UUID): List<UUID>
 
     fun existsByUserIdAndRoleId(userId: UUID, roleId: UUID): Boolean
+    fun existsByRoleId(roleId: UUID): Boolean
+    fun findAllByUserId(userId: UUID): List<UserRoleEntity>
+    fun findByUserIdAndRoleNameIgnoreCase(userId: UUID, roleName: String): Optional<UserRoleEntity>
 }
 
 interface RolePermissionRepository : JpaRepository<RolePermissionEntity, UUID> {
@@ -50,6 +54,7 @@ interface RolePermissionRepository : JpaRepository<RolePermissionEntity, UUID> {
     fun findPermissionCodesByRoleIds(roleIds: Collection<UUID>): List<String>
 
     fun existsByRoleIdAndPermissionId(roleId: UUID, permissionId: UUID): Boolean
+    fun findAllByRoleId(roleId: UUID): List<RolePermissionEntity>
 }
 
 interface RefreshTokenRepository : JpaRepository<RefreshTokenEntity, UUID> {

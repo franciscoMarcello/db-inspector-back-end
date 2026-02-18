@@ -23,7 +23,9 @@ data class LogoutRequest(
 
 data class AuthUserResponse(
     val id: String,
-    val email: String
+    val email: String,
+    val roles: List<String>,
+    val permissions: List<String>
 )
 
 data class AuthResponse(
@@ -32,4 +34,48 @@ data class AuthResponse(
     val expiresInSeconds: Long,
     val refreshToken: String,
     val user: AuthUserResponse
+)
+
+data class AdminCreateUserRequest(
+    @field:Email
+    @field:NotBlank
+    val email: String,
+    @field:NotBlank
+    val password: String,
+    val active: Boolean = true,
+    val roles: List<String> = listOf("USER")
+)
+
+data class AdminSetUserActiveRequest(
+    val active: Boolean
+)
+
+data class AdminAssignRoleRequest(
+    @field:NotBlank
+    val role: String
+)
+
+data class AdminUserResponse(
+    val id: String,
+    val email: String,
+    val active: Boolean,
+    val roles: List<String>,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+data class AdminRoleResponse(
+    val name: String,
+    val permissions: List<String>
+)
+
+data class AdminCreateRoleRequest(
+    @field:NotBlank
+    val name: String,
+    val permissions: List<String> = emptyList()
+)
+
+data class AdminUpdateRoleRequest(
+    val name: String? = null,
+    val permissions: List<String>? = null
 )
