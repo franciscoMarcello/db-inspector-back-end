@@ -70,6 +70,9 @@ class AdminUserController(
     @GetMapping("/permissions")
     fun listPermissions(): List<String> = PermissionCodes.all
 
+    @GetMapping("/permissions/catalog")
+    fun listPermissionsCatalog(): List<PermissionView> = PermissionCodes.catalog
+
     @PostMapping("/users/{id}/revoke-refresh-tokens")
     fun revokeRefreshTokens(@PathVariable id: UUID): ResponseEntity<Void> {
         service.revokeRefreshTokens(id)

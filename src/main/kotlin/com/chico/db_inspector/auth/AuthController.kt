@@ -2,6 +2,7 @@ package com.chico.dbinspector.auth
 
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
@@ -28,4 +29,8 @@ class AuthController(
 
     @GetMapping("/me")
     fun me(authentication: Authentication): AuthUserResponse = authService.me(authentication)
+
+    @GetMapping("/permissions/catalog")
+    @PreAuthorize("hasRole('ADMIN')")
+    fun permissionsCatalog(): List<PermissionView> = PermissionCodes.catalog
 }

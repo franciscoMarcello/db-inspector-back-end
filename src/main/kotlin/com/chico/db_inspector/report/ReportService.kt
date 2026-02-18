@@ -39,6 +39,7 @@ class ReportService(
     private val repository: ReportRepository,
     private val folderRepository: ReportFolderRepository,
     private val jasperTemplateRepository: ReportJasperTemplateRepository,
+    private val accessControl: ReportAccessControlService,
     private val sqlExecClient: SqlExecClient,
     private val properties: DbInspectorProperties,
     private val clock: Clock = Clock.systemDefaultZone()
@@ -61,9 +62,11 @@ class ReportService(
 
     fun list(): List<ReportResponse> =
         repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
+            .filter { accessControl.canViewReport(it) }
             .map { it.toResponse() }
 
     fun create(request: ReportRequest): ReportResponse {
+        request.folderId?.let { accessControl.requireFolderAccess(it, AccessAction.EDIT) }
         val entity = ReportEntity(
             name = request.name.trim(),
             templateName = request.templateName.trim(),
@@ -83,6 +86,8 @@ class ReportService(
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
+        accessControl.requireReportAccess(entity, AccessAction.EDIT)
+        request.folderId?.let { accessControl.requireFolderAccess(it, AccessAction.EDIT) }
         entity.name = request.name.trim()
         entity.templateName = request.templateName.trim()
         entity.sql = request.sql.trim()
@@ -97,9 +102,10 @@ class ReportService(
     }
 
     fun delete(id: UUID) {
-        if (!repository.existsById(id)) {
-            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        val entity = repository.findById(id).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
+        accessControl.requireReportAccess(entity, AccessAction.DELETE)
         repository.deleteById(id)
     }
 
@@ -107,6 +113,7 @@ class ReportService(
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
+        accessControl.requireReportAccess(entity, AccessAction.RUN)
         val execution = executeReport(entity, ctx, request.params)
 
         val totalRows = execution.allRows.size
@@ -140,6 +147,7 @@ class ReportService(
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
+        accessControl.requireReportAccess(entity, AccessAction.RUN)
         val jasperTemplate = entity.jasperTemplate ?: throw ResponseStatusException(
             HttpStatus.BAD_REQUEST,
             "Relatorio sem template Jasper vinculado"
@@ -309,6 +317,7 @@ class ReportService(
         val entity = repository.findById(reportId).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
+        accessControl.requireReportAccess(entity, AccessAction.RUN)
         val variable = entity.variables.firstOrNull { it.key.equals(variableKey, ignoreCase = true) }
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Variavel '$variableKey' nao encontrada")
         return try {

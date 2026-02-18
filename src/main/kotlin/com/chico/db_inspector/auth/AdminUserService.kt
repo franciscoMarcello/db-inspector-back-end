@@ -58,6 +58,12 @@ class AdminUserService(
     fun setUserActive(id: UUID, active: Boolean): AdminUserResponse {
         val user = findUser(id)
         user.active = active
+        if (!active) {
+            refreshTokenRepository.findAllByUserIdAndRevokedFalse(id).forEach {
+                it.revoked = true
+                refreshTokenRepository.save(it)
+            }
+        }
         return toAdminUserResponse(userRepository.save(user))
     }
 

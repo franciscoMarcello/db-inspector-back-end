@@ -19,6 +19,8 @@ spring.quartz.properties.org.quartz.jobStore.driverDelegateClass=
 spring.quartz.properties.org.quartz.threadPool.threadCount=
 
 dbinspector.mail.from=
+dbinspector.sql-exec-base-url=
+dbinspector.apitoken=
 dbinspector.schedule.preview-limit=
 dbinspector.schedule.attachment-row-limit=
 dbinspector.schedule.attachment-size-limit-bytes=

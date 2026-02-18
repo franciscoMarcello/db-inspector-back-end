@@ -1,5 +1,6 @@
 package com.chico.dbinspector.web
 
+import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.util.UpstreamUtils
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.core.MethodParameter
@@ -11,6 +12,7 @@ import org.springframework.web.method.support.ModelAndViewContainer
 
 @Component
 class UpstreamContextResolver(
+    private val properties: DbInspectorProperties,
     @Value("\${dbinspector.allowLocalhost:true}") private val allowLocalhost: Boolean,
     @Value("\${dbinspector.requirePathSuffix:/sql/exec/}") private val requirePathSuffix: String
 ) : HandlerMethodArgumentResolver {
@@ -24,13 +26,18 @@ class UpstreamContextResolver(
         webRequest: NativeWebRequest,
         binderFactory: WebDataBinderFactory?
     ): Any {
-        val url = webRequest.getHeader("X-SQL-EXEC-URL") ?: error("Header X-SQL-EXEC-URL obrigatório")
+        val url = properties.sqlExecBaseUrl.trim()
+        require(url.isNotBlank()) { "dbinspector.sqlExecBaseUrl obrigatorio" }
         UpstreamUtils.validateExternalUrl(url, allowLocalhost = allowLocalhost, requirePathSuffix = requirePathSuffix)
 
-        // App JWT uses Authorization; upstream token must use dedicated headers.
-        val upstreamAuth = webRequest.getHeader("X-Upstream-Authorization")
-        val apiToken = webRequest.getHeader("X-API-Token")
-        val bearer = UpstreamUtils.resolveBearer(upstreamAuth, apiToken)
+        val apiToken = properties.apitoken.trim()
+        require(apiToken.isNotBlank()) { "dbinspector.apitoken obrigatorio" }
+
+        val bearer = if (apiToken.startsWith("Bearer ", ignoreCase = true)) {
+            "Bearer ${apiToken.removePrefix("Bearer ").trim()}"
+        } else {
+            "Bearer $apiToken"
+        }
 
         return UpstreamContext(url, bearer)
     }

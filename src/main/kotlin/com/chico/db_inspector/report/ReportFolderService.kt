@@ -9,10 +9,15 @@ import java.util.UUID
 @Service
 class ReportFolderService(
     private val folderRepository: ReportFolderRepository,
-    private val reportRepository: ReportRepository
+    private val reportRepository: ReportRepository,
+    private val accessControl: ReportAccessControlService
 ) {
     fun list(): List<ReportFolderResponse> =
         folderRepository.findAll(Sort.by(Sort.Direction.ASC, "name"))
+            .filter { folder ->
+                val folderId = folder.id ?: return@filter false
+                accessControl.canViewFolder(folderId)
+            }
             .map { it.toResponse() }
 
     fun create(request: ReportFolderRequest): ReportFolderResponse {
@@ -30,6 +35,7 @@ class ReportFolderService(
     }
 
     fun update(id: UUID, request: ReportFolderRequest): ReportFolderResponse {
+        accessControl.requireFolderAccess(id, AccessAction.EDIT)
         val entity = folderRepository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Pasta de relatorio nao encontrada")
         }
@@ -45,6 +51,7 @@ class ReportFolderService(
     }
 
     fun delete(id: UUID) {
+        accessControl.requireFolderAccess(id, AccessAction.DELETE)
         if (!folderRepository.existsById(id)) {
             throw ResponseStatusException(HttpStatus.NOT_FOUND, "Pasta de relatorio nao encontrada")
         }

@@ -21,7 +21,7 @@ class CorsMvcConfig(
         reg.addMapping("/api/db/**")
             .allowedOrigins(*allowedOrigins.toTypedArray())
             .allowedMethods("GET","POST","PUT","PATCH","DELETE","OPTIONS")
-            .allowedHeaders("X-SQL-EXEC-URL","X-API-Token","X-Upstream-Authorization","Authorization","Content-Type","Accept","X-Requested-With")
+            .allowedHeaders("Authorization","Content-Type","Accept","X-Requested-With")
             .exposedHeaders("Location")
             .allowCredentials(true)
             .maxAge(3600)
