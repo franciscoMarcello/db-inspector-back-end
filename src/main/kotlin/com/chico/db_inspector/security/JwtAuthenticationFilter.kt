@@ -7,6 +7,7 @@ import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatus
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource
@@ -36,7 +37,7 @@ class JwtAuthenticationFilter(
             return
         }
 
-        runCatching {
+        val authResult = runCatching {
             val claims = jwtService.parseAccessToken(token)
             val email = claims.subject ?: return@runCatching
             val userDetails = userDetailsService.loadUserByUsername(email) as AuthUserPrincipal
@@ -45,6 +46,10 @@ class JwtAuthenticationFilter(
             val auth = UsernamePasswordAuthenticationToken(userDetails, null, userDetails.authorities)
             auth.details = WebAuthenticationDetailsSource().buildDetails(request)
             SecurityContextHolder.getContext().authentication = auth
+        }
+        if (authResult.isFailure) {
+            response.status = HttpStatus.UNAUTHORIZED.value()
+            return
         }
 
         filterChain.doFilter(request, response)
