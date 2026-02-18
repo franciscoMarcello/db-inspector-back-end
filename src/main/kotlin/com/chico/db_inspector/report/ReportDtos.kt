@@ -29,6 +29,7 @@ data class ReportVariableRequest(
     @field:NotBlank
     val type: String,
     val required: Boolean = true,
+    val multiple: Boolean = false,
     val defaultValue: String? = null,
     val optionsSql: String? = null,
     val orderIndex: Int? = null
@@ -66,6 +67,7 @@ data class ReportVariableResponse(
     val label: String,
     val type: String,
     val required: Boolean,
+    val multiple: Boolean,
     val defaultValue: String?,
     val optionsSql: String?,
     val orderIndex: Int
@@ -98,6 +100,23 @@ data class ReportSummary(
 data class ReportRunRequest(
     val params: Map<String, Any?> = emptyMap(),
     val safe: Boolean = false
+)
+
+data class ReportValidationRequest(
+    @field:NotBlank
+    val sql: String,
+    @field:Valid
+    val variables: List<ReportVariableRequest> = emptyList(),
+    val params: Map<String, Any?> = emptyMap(),
+    val validateSyntax: Boolean = true,
+    val enforceRequired: Boolean = true,
+    val enforceReadOnly: Boolean = true
+)
+
+data class ReportValidationResponse(
+    val valid: Boolean,
+    val errors: List<String>,
+    val renderedQuery: String?
 )
 
 data class ReportRunResponse(

@@ -34,6 +34,8 @@ class ReportVariableEntity(
     var type: String = "",
     @Column(nullable = false)
     var required: Boolean = true,
+    @Column(nullable = false)
+    var multiple: Boolean = false,
     @Column(name = "default_value", columnDefinition = "TEXT")
     var defaultValue: String? = null,
     @Column(name = "options_sql", columnDefinition = "TEXT")
