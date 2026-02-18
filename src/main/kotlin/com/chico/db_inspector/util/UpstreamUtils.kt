@@ -25,18 +25,4 @@ object UpstreamUtils {
             }
         }
     }
-
-
-    fun resolveBearer(authorization: String?, apiToken: String?): String {
-        val auth = authorization?.trim().orEmpty()
-        if (auth.isNotEmpty()) {
-            require(auth.startsWith("Bearer ", ignoreCase = true)) { "Authorization deve usar Bearer" }
-            val token = auth.removePrefix("Bearer ").trim()
-            require(token.isNotEmpty()) { "Bearer token vazio" }
-            return "Bearer $token"
-        }
-        val token = apiToken?.trim().orEmpty()
-        require(token.isNotEmpty()) { "Token upstream ausente: X-Upstream-Authorization Bearer ou X-API-Token" }
-        return "Bearer $token"
-    }
 }

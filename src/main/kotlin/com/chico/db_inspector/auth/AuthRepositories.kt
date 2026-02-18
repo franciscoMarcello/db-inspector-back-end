@@ -39,7 +39,6 @@ interface UserRoleRepository : JpaRepository<UserRoleEntity, UUID> {
 
     fun existsByUserIdAndRoleId(userId: UUID, roleId: UUID): Boolean
     fun existsByRoleId(roleId: UUID): Boolean
-    fun findAllByUserId(userId: UUID): List<UserRoleEntity>
     fun findByUserIdAndRoleNameIgnoreCase(userId: UUID, roleName: String): Optional<UserRoleEntity>
 }
 

@@ -11,7 +11,6 @@ interface ReportFolderAclRepository : JpaRepository<ReportFolderAclEntity, UUID>
         subjectType: String,
         subjectKey: String
     ): Optional<ReportFolderAclEntity>
-    fun existsByFolderId(folderId: UUID): Boolean
 }
 
 interface ReportAclRepository : JpaRepository<ReportAclEntity, UUID> {
@@ -21,5 +20,4 @@ interface ReportAclRepository : JpaRepository<ReportAclEntity, UUID> {
         subjectType: String,
         subjectKey: String
     ): Optional<ReportAclEntity>
-    fun existsByReportId(reportId: UUID): Boolean
 }
