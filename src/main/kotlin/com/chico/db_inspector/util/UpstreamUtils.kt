@@ -36,7 +36,7 @@ object UpstreamUtils {
             return "Bearer $token"
         }
         val token = apiToken?.trim().orEmpty()
-        require(token.isNotEmpty()) { "Token ausente: Authorization Bearer ou X-API-Token" }
+        require(token.isNotEmpty()) { "Token upstream ausente: X-Upstream-Authorization Bearer ou X-API-Token" }
         return "Bearer $token"
     }
 }

@@ -1,0 +1,58 @@
+package com.chico.dbinspector.auth
+
+import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
+import java.util.Optional
+import java.util.UUID
+
+interface AppUserRepository : JpaRepository<AppUserEntity, UUID> {
+    fun findByEmailIgnoreCase(email: String): Optional<AppUserEntity>
+}
+
+interface RoleRepository : JpaRepository<RoleEntity, UUID> {
+    fun findByNameIgnoreCase(name: String): Optional<RoleEntity>
+}
+
+interface PermissionRepository : JpaRepository<PermissionEntity, UUID> {
+    fun findByCode(code: String): Optional<PermissionEntity>
+}
+
+interface UserRoleRepository : JpaRepository<UserRoleEntity, UUID> {
+    @Query(
+        """
+        select distinct ur.role.name
+        from UserRoleEntity ur
+        where ur.user.id = :userId
+        """
+    )
+    fun findRoleNamesByUserId(userId: UUID): List<String>
+
+    @Query(
+        """
+        select distinct ur.role.id
+        from UserRoleEntity ur
+        where ur.user.id = :userId
+        """
+    )
+    fun findRoleIdsByUserId(userId: UUID): List<UUID>
+
+    fun existsByUserIdAndRoleId(userId: UUID, roleId: UUID): Boolean
+}
+
+interface RolePermissionRepository : JpaRepository<RolePermissionEntity, UUID> {
+    @Query(
+        """
+        select distinct rp.permission.code
+        from RolePermissionEntity rp
+        where rp.role.id in :roleIds
+        """
+    )
+    fun findPermissionCodesByRoleIds(roleIds: Collection<UUID>): List<String>
+
+    fun existsByRoleIdAndPermissionId(roleId: UUID, permissionId: UUID): Boolean
+}
+
+interface RefreshTokenRepository : JpaRepository<RefreshTokenEntity, UUID> {
+    fun findByTokenHashAndRevokedFalse(tokenHash: String): Optional<RefreshTokenEntity>
+    fun findAllByUserIdAndRevokedFalse(userId: UUID): List<RefreshTokenEntity>
+}

@@ -24,5 +24,10 @@ dbinspector.schedule.attachment-row-limit=
 dbinspector.schedule.attachment-size-limit-bytes=
 dbinspector.schedule.sql-timeout-ms=
 dbinspector.schedule.time-zone=America/Porto_Velho
+dbinspector.auth.jwt.secret=
+dbinspector.auth.jwt.access-ttl-minutes=15
+dbinspector.auth.refresh-ttl-days=7
+dbinspector.auth.bootstrap-admin.email=
+dbinspector.auth.bootstrap-admin.password=
 
 CORS_EXTRA_ORIGIN=
