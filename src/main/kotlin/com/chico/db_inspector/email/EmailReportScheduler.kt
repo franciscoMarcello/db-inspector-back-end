@@ -2,6 +2,7 @@ package com.chico.dbinspector.email
 
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.service.SqlExecClient
+import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import org.quartz.CronScheduleBuilder
 import org.quartz.JobBuilder
@@ -52,6 +53,7 @@ class EmailReportScheduler(
     )
 
     fun sendNow(body: EmailReportRequest, ctx: UpstreamContext, query: String) =
+        ReadOnlySqlValidator.requireReadOnly(query).let {
         sqlExecClient.exec(
             endpointUrl = ctx.endpointUrl,
             bearer = ctx.bearer,
@@ -59,6 +61,7 @@ class EmailReportScheduler(
             asDict = body.asDict ?: true,
             withDescription = body.withDescription ?: true
         ).let { emailService.sendReport(body, it) }
+    }
 
     private val jobGroup = "email-report"
 
@@ -91,6 +94,7 @@ class EmailReportScheduler(
     }
 
     fun updateSchedule(id: String, body: EmailReportRequest, ctx: UpstreamContext, query: String): EmailScheduleResponse {
+        ReadOnlySqlValidator.requireReadOnly(query)
         val key = findJobKey(id) ?: throw IllegalArgumentException("Agendamento nao encontrado")
         val (hour, minute) = parseTime(body.time)
         val days = parseDays(body.days)
@@ -142,6 +146,7 @@ class EmailReportScheduler(
     }
 
     private fun scheduleInternal(body: EmailReportRequest, ctx: UpstreamContext, query: String): EmailScheduleResponse {
+        ReadOnlySqlValidator.requireReadOnly(query)
         val (hour, minute) = parseTime(body.time)
         val days = parseDays(body.days)
         val cron = buildCron(hour, minute, days)

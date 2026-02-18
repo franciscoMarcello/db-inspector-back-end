@@ -3,6 +3,7 @@ package com.chico.dbinspector.controller
 import com.chico.dbinspector.email.EmailReportRequest
 import com.chico.dbinspector.email.EmailReportScheduler
 import com.chico.dbinspector.email.EmailScheduleResponse
+import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
@@ -33,6 +34,7 @@ class EmailScheduleController(
     ): EmailScheduleResponse {
         val query = body.sql.trim()
         require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(query)
         require(!body.time.isNullOrBlank() && !body.days.isNullOrEmpty()) {
             "Para agendar informe 'time' (HH:mm) e pelo menos um dia em 'days'"
         }
@@ -47,6 +49,7 @@ class EmailScheduleController(
     ): EmailScheduleResponse {
         val query = body.sql.trim()
         require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(query)
         require(!body.time.isNullOrBlank() && !body.days.isNullOrEmpty()) {
             "Para agendar informe 'time' (HH:mm) e pelo menos um dia em 'days'"
         }

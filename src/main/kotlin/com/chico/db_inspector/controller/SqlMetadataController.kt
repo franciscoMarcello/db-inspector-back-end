@@ -2,6 +2,7 @@ package com.chico.dbinspector.controller
 
 import com.chico.db_inspector.model.SqlQuery
 import com.chico.dbinspector.service.SqlExecClient
+import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -120,6 +121,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     fun runQuery(@RequestBody body: SqlQuery, ctx: UpstreamContext): ResponseEntity<Any> {
         val q = body.query.trim()
         require(q.isNotEmpty()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(q)
 
         val page = (body.page ?: 0).coerceAtLeast(0)
         val size = (body.size ?: DEFAULT_PAGE_SIZE).coerceIn(1, MAX_PAGE_SIZE)
@@ -145,6 +147,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     fun runQueryAll(@RequestBody body: SqlQuery, ctx: UpstreamContext): ResponseEntity<Any> {
         val q = body.query.trim()
         require(q.isNotEmpty()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(q)
         val result = sql.exec(ctx.endpointUrl, ctx.bearer, q, body.asDict ?: true, body.withDescription ?: true)
         return ResponseEntity.ok(result)
     }

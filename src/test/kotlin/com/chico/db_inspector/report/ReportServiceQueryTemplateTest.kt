@@ -2,8 +2,11 @@ package com.chico.dbinspector.report
 
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.service.SqlExecClient
+import com.chico.dbinspector.web.UpstreamContext
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.springframework.http.HttpStatus
@@ -107,6 +110,113 @@ class ReportServiceQueryTemplateTest {
         )
 
         assertEquals("SELECT * FROM t WHERE status = 'OPEN'", rendered)
+    }
+
+    @Test
+    fun `buildQueryWithParams should render IN clause for multiple variable`() {
+        val service = createService()
+        val variables = listOf(
+            ReportVariableEntity(
+                key = "status",
+                label = "Status",
+                type = "string",
+                required = true,
+                multiple = true,
+                orderIndex = 0
+            )
+        )
+
+        val rendered = invokeBuildQueryWithParams(
+            service = service,
+            queryTemplate = "SELECT * FROM t WHERE status IN :status",
+            variables = variables,
+            params = mapOf("status" to listOf("OPEN", "PENDING", "CLOSED")),
+            enforceRequired = true
+        )
+
+        assertEquals("SELECT * FROM t WHERE status IN ('OPEN', 'PENDING', 'CLOSED')", rendered)
+    }
+
+    @Test
+    fun `buildQueryWithParams should fail for empty list in multiple variable`() {
+        val service = createService()
+        val variables = listOf(
+            ReportVariableEntity(
+                key = "ids",
+                label = "Ids",
+                type = "number",
+                required = true,
+                multiple = true,
+                orderIndex = 0
+            )
+        )
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            invokeBuildQueryWithParams(
+                service = service,
+                queryTemplate = "SELECT * FROM t WHERE id IN :ids",
+                variables = variables,
+                params = mapOf("ids" to emptyList<Int>()),
+                enforceRequired = true
+            )
+        }
+
+        assertEquals("Parametro 'ids' nao pode ser lista vazia", ex.message)
+    }
+
+    @Test
+    fun `validate should reject multiple variable when using IN with parentheses`() {
+        val service = createService()
+
+        val response = service.validate(
+            request = ReportValidationRequest(
+                sql = "SELECT chip, nome FROM confinamento.animal WHERE nome IN (:nome)",
+                variables = listOf(
+                    ReportVariableRequest(
+                        key = "nome",
+                        label = "Nome",
+                        type = "string",
+                        required = true,
+                        multiple = true
+                    )
+                ),
+                params = mapOf("nome" to listOf("FB.73", "FB.249")),
+                validateSyntax = false
+            ),
+            ctx = UpstreamContext(endpointUrl = "http://localhost/sql/exec/", bearer = "Bearer test")
+        )
+
+        assertFalse(response.valid)
+        assertTrue(response.errors.any { it.contains("deve usar 'IN :nome'") })
+    }
+
+    @Test
+    fun `validate should accept multiple variable when using IN without parentheses`() {
+        val service = createService()
+
+        val response = service.validate(
+            request = ReportValidationRequest(
+                sql = "SELECT chip, nome FROM confinamento.animal WHERE nome IN :nome",
+                variables = listOf(
+                    ReportVariableRequest(
+                        key = "nome",
+                        label = "Nome",
+                        type = "string",
+                        required = true,
+                        multiple = true
+                    )
+                ),
+                params = mapOf("nome" to listOf("FB.73", "FB.249")),
+                validateSyntax = false
+            ),
+            ctx = UpstreamContext(endpointUrl = "http://localhost/sql/exec/", bearer = "Bearer test")
+        )
+
+        assertTrue(response.valid)
+        assertEquals(
+            "SELECT chip, nome FROM confinamento.animal WHERE nome IN ('FB.73', 'FB.249')",
+            response.renderedQuery
+        )
     }
 
     private fun createService(): ReportService {

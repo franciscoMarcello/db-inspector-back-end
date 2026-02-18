@@ -4,6 +4,7 @@ import com.chico.dbinspector.email.EmailReportRequest
 import com.chico.dbinspector.email.EmailReportScheduler
 import com.chico.dbinspector.email.EmailReportService
 import com.chico.dbinspector.email.EmailTestRequest
+import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
@@ -26,6 +27,7 @@ class EmailReportController(
     ): ResponseEntity<Any> {
         val query = body.sql.trim()
         require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(query)
 
         val wantsSchedule = !body.time.isNullOrBlank() || !body.days.isNullOrEmpty()
         if (wantsSchedule) {

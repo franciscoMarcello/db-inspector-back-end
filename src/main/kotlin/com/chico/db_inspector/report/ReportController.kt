@@ -27,6 +27,12 @@ class ReportController(
     fun create(@Valid @RequestBody body: ReportRequest): ReportResponse =
         reportService.create(body)
 
+    @PostMapping("/validate")
+    fun validate(
+        @Valid @RequestBody body: ReportValidationRequest,
+        ctx: UpstreamContext
+    ): ReportValidationResponse = reportService.validate(body, ctx)
+
     @PutMapping("/{id}")
     fun update(
         @PathVariable id: UUID,

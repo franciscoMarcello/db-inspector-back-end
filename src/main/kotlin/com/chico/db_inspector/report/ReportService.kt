@@ -3,6 +3,7 @@ package com.chico.dbinspector.report
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.email.EmailReportFormatter
 import com.chico.dbinspector.service.SqlExecClient
+import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import net.sf.jasperreports.engine.DefaultJasperReportsContext
 import net.sf.jasperreports.engine.JRField
@@ -54,6 +55,9 @@ class ReportService(
     private val optionColumnValor = "valor"
     private val optionColumnDescricao = "descricao"
     private val defaultFilterOptionsLimit = 100
+    private val placeholderRegex = Regex("(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
+    private val writeKeywordsRegex =
+        Regex("\\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\\b", RegexOption.IGNORE_CASE)
 
     fun list(): List<ReportResponse> =
         repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
@@ -70,6 +74,7 @@ class ReportService(
             jasperTemplate = resolveJasperTemplate(request.jasperTemplateId)
         )
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(entity.sql)
         entity.replaceVariables(normalizeVariables(request.variables))
         return repository.save(entity).toResponse()
     }
@@ -86,6 +91,7 @@ class ReportService(
         entity.folder = resolveFolder(request.folderId)
         entity.jasperTemplate = resolveJasperTemplate(request.jasperTemplateId)
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(entity.sql)
         entity.replaceVariables(normalizeVariables(request.variables))
         return repository.save(entity).toResponse()
     }
@@ -228,6 +234,72 @@ class ReportService(
         }
     }
 
+    fun validate(request: ReportValidationRequest, ctx: UpstreamContext): ReportValidationResponse {
+        val errors = mutableListOf<String>()
+        val queryTemplate = request.sql.trim()
+        val variables = try {
+            normalizeVariables(request.variables)
+        } catch (ex: IllegalArgumentException) {
+            errors += ex.message ?: "Configuracao de variaveis invalida"
+            emptyList()
+        }
+
+        if (queryTemplate.isBlank()) {
+            errors += "SQL nao pode ser vazia"
+            return ReportValidationResponse(valid = false, errors = errors, renderedQuery = null)
+        }
+
+        if (request.enforceReadOnly) {
+            validateReadOnlyQuery(queryTemplate)?.let { errors += it }
+        }
+
+        val placeholdersInQuery = extractPlaceholders(queryTemplate)
+        val variableKeys = variables.map { it.key }.toSet()
+        val unknownPlaceholders = placeholdersInQuery - variableKeys
+        if (unknownPlaceholders.isNotEmpty()) {
+            errors += "Placeholders sem variavel configurada: ${unknownPlaceholders.joinToString(", ")}"
+        }
+
+        variables.forEach { variable ->
+            if (!placeholdersInQuery.contains(variable.key)) return@forEach
+            if (!variable.multiple) return@forEach
+
+            val hasWrongInSyntax = Regex("\\bin\\s*\\(\\s*:${Regex.escape(variable.key)}\\s*\\)", RegexOption.IGNORE_CASE)
+                .containsMatchIn(queryTemplate)
+            if (hasWrongInSyntax) {
+                errors += "Variavel multipla '${variable.key}' deve usar 'IN :${variable.key}' (sem parenteses)"
+                return@forEach
+            }
+
+            val hasExpectedInSyntax = Regex("\\bin\\s*:${Regex.escape(variable.key)}\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(queryTemplate)
+            if (!hasExpectedInSyntax) {
+                errors += "Variavel multipla '${variable.key}' deve ser usada com IN :${variable.key}"
+            }
+        }
+
+        val renderedQuery = runCatching {
+            buildQueryWithParams(queryTemplate, variables, request.params, request.enforceRequired)
+        }.getOrElse { ex ->
+            errors += ex.message ?: "Falha ao montar SQL"
+            null
+        }
+
+        if (errors.isNotEmpty() || renderedQuery == null) {
+            return ReportValidationResponse(valid = false, errors = errors, renderedQuery = renderedQuery)
+        }
+
+        if (request.validateSyntax) {
+            runCatching {
+                sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, "EXPLAIN $renderedQuery", asDict = true, withDescription = true)
+            }.onFailure { ex ->
+                errors += "Falha de sintaxe/execucao no banco: ${ex.message ?: "erro desconhecido"}"
+            }
+        }
+
+        return ReportValidationResponse(valid = errors.isEmpty(), errors = errors, renderedQuery = renderedQuery)
+    }
+
     fun listVariableOptions(
         reportId: UUID,
         variableKey: String,
@@ -318,6 +390,7 @@ class ReportService(
                         label = variable.label,
                         type = variable.type,
                         required = variable.required,
+                        multiple = variable.multiple,
                         defaultValue = variable.defaultValue,
                         optionsSql = variable.optionsSql,
                         orderIndex = variable.orderIndex
@@ -349,6 +422,7 @@ class ReportService(
     ): ExecutionResult {
         val queryTemplate = entity.sql.trim()
         require(queryTemplate.isNotBlank()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(queryTemplate)
         val query = buildQueryWithParams(queryTemplate, entity.variables, params)
 
         val start = System.nanoTime()
@@ -391,6 +465,13 @@ class ReportService(
         return rendered
     }
 
+    private fun extractPlaceholders(query: String): Set<String> =
+        placeholderRegex.findAll(query).map { it.groupValues[1] }.toSet()
+
+    private fun validateReadOnlyQuery(queryTemplate: String): String? {
+        return ReadOnlySqlValidator.validate(queryTemplate)
+    }
+
     private fun resolveVariableValue(
         variable: ReportVariableEntity,
         params: Map<String, Any?>,
@@ -421,8 +502,7 @@ class ReportService(
             withoutTrailingSemicolon.startsWith("with", ignoreCase = true)
         require(startsLikeSelect) { "SQL de opcoes deve comecar com SELECT ou WITH" }
         require(
-            !Regex("\\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\\b", RegexOption.IGNORE_CASE)
-                .containsMatchIn(withoutTrailingSemicolon)
+            !writeKeywordsRegex.containsMatchIn(withoutTrailingSemicolon)
         ) { "SQL de opcoes deve ser somente leitura" }
 
         return withoutTrailingSemicolon
@@ -467,7 +547,23 @@ class ReportService(
 
     private fun toSqlLiteral(variable: ReportVariableEntity, rawValue: Any?): String {
         if (rawValue == null) return "NULL"
+        if (!variable.multiple) return toSingleSqlLiteral(variable, rawValue)
 
+        val items = when (rawValue) {
+            is Collection<*> -> rawValue.toList()
+            is Array<*> -> rawValue.toList()
+            else -> listOf(rawValue)
+        }
+        require(items.isNotEmpty()) { "Parametro '${variable.key}' nao pode ser lista vazia" }
+
+        val sqlItems = items.map { item ->
+            require(item != null) { "Parametro '${variable.key}' nao pode conter valores nulos" }
+            toSingleSqlLiteral(variable, item)
+        }
+        return sqlItems.joinToString(prefix = "(", postfix = ")")
+    }
+
+    private fun toSingleSqlLiteral(variable: ReportVariableEntity, rawValue: Any): String {
         return when (variable.type) {
             "string" -> "'${escapeSqlString(rawValue.toString())}'"
             "number" -> parseNumber(variable.key, rawValue).toPlainString()
@@ -693,6 +789,7 @@ class ReportService(
                 label = label,
                 type = type,
                 required = variable.required,
+                multiple = variable.multiple,
                 defaultValue = variable.defaultValue?.trim().takeUnless { it.isNullOrBlank() },
                 optionsSql = variable.optionsSql?.trim().takeUnless { it.isNullOrBlank() },
                 orderIndex = variable.orderIndex ?: index
