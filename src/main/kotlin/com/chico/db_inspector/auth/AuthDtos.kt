@@ -50,6 +50,11 @@ data class AdminSetUserActiveRequest(
     val active: Boolean
 )
 
+data class AdminResetPasswordRequest(
+    @field:NotBlank
+    val password: String
+)
+
 data class AdminAssignRoleRequest(
     @field:NotBlank
     val role: String

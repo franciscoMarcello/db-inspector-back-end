@@ -68,6 +68,21 @@ class AdminUserService(
     }
 
     @Transactional
+    fun resetPassword(id: UUID, rawPassword: String) {
+        val user = findUser(id)
+        val password = rawPassword.trim()
+        require(password.length >= 6) { "Senha deve ter pelo menos 6 caracteres" }
+
+        user.passwordHash = passwordEncoder.encode(password)
+        userRepository.save(user)
+
+        refreshTokenRepository.findAllByUserIdAndRevokedFalse(id).forEach {
+            it.revoked = true
+            refreshTokenRepository.save(it)
+        }
+    }
+
+    @Transactional
     fun assignRole(userId: UUID, roleName: String): AdminUserResponse {
         val user = findUser(userId)
         val normalizedRole = roleName.trim().uppercase()

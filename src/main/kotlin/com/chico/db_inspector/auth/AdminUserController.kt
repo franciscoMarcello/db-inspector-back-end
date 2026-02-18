@@ -33,6 +33,15 @@ class AdminUserController(
         @RequestBody request: AdminSetUserActiveRequest
     ): AdminUserResponse = service.setUserActive(id, request.active)
 
+    @PatchMapping("/users/{id}/password")
+    fun resetPassword(
+        @PathVariable id: UUID,
+        @Valid @RequestBody request: AdminResetPasswordRequest
+    ): ResponseEntity<Void> {
+        service.resetPassword(id, request.password)
+        return ResponseEntity.noContent().build()
+    }
+
     @PostMapping("/users/{id}/roles")
     fun assignRole(
         @PathVariable id: UUID,
