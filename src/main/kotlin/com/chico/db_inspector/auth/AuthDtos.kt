@@ -23,6 +23,7 @@ data class LogoutRequest(
 
 data class AuthUserResponse(
     val id: String,
+    val name: String,
     val email: String,
     val roles: List<String>,
     val permissions: List<String>
@@ -37,6 +38,8 @@ data class AuthResponse(
 )
 
 data class AdminCreateUserRequest(
+    @field:NotBlank
+    val name: String,
     @field:Email
     @field:NotBlank
     val email: String,
@@ -48,6 +51,11 @@ data class AdminCreateUserRequest(
 
 data class AdminSetUserActiveRequest(
     val active: Boolean
+)
+
+data class AdminSetUserNameRequest(
+    @field:NotBlank
+    val name: String
 )
 
 data class AdminResetPasswordRequest(
@@ -62,6 +70,7 @@ data class AdminAssignRoleRequest(
 
 data class AdminUserResponse(
     val id: String,
+    val name: String,
     val email: String,
     val active: Boolean,
     val roles: List<String>,

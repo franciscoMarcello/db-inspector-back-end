@@ -28,6 +28,8 @@ class AdminUserService(
 
     @Transactional
     fun createUser(request: AdminCreateUserRequest): AdminUserResponse {
+        val name = request.name.trim()
+        require(name.isNotBlank()) { "Nome obrigatorio" }
         val email = request.email.trim().lowercase()
         require(email.isNotBlank()) { "Email obrigatorio" }
         val password = request.password.trim()
@@ -39,6 +41,7 @@ class AdminUserService(
 
         val user = userRepository.save(
             AppUserEntity(
+                name = name,
                 email = email,
                 passwordHash = passwordEncoder.encode(password),
                 active = request.active
@@ -64,6 +67,15 @@ class AdminUserService(
                 refreshTokenRepository.save(it)
             }
         }
+        return toAdminUserResponse(userRepository.save(user))
+    }
+
+    @Transactional
+    fun setUserName(id: UUID, rawName: String): AdminUserResponse {
+        val user = findUser(id)
+        val name = rawName.trim()
+        require(name.isNotBlank()) { "Nome obrigatorio" }
+        user.name = name
         return toAdminUserResponse(userRepository.save(user))
     }
 
@@ -267,6 +279,7 @@ class AdminUserService(
 
         return AdminUserResponse(
             id = userId.toString(),
+            name = user.name?.trim().takeUnless { it.isNullOrBlank() } ?: "",
             email = user.email,
             active = user.active,
             roles = roles,

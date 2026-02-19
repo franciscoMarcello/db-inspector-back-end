@@ -91,6 +91,7 @@ data class RefreshTokenPayload(
 
 data class AuthUserPrincipal(
     val userId: UUID,
+    val name: String,
     private val email: String,
     private val passwordHash: String,
     private val active: Boolean,

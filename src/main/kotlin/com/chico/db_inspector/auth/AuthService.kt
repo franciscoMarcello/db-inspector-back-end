@@ -70,7 +70,7 @@ class AuthService(
     fun me(authentication: Authentication): AuthUserResponse {
         val principal = authentication.principal as? AuthUserPrincipal
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Nao autenticado")
-        return toAuthUserResponse(principal.userId, principal.username)
+        return toAuthUserResponse(principal.userId, principal.name, principal.username)
     }
 
     @Transactional
@@ -95,11 +95,11 @@ class AuthService(
             accessToken = accessToken,
             expiresInSeconds = expiresIn.coerceAtLeast(0),
             refreshToken = refreshPayload.rawToken,
-            user = toAuthUserResponse(userId, user.email)
+            user = toAuthUserResponse(userId, user.name, user.email)
         )
     }
 
-    private fun toAuthUserResponse(userId: UUID, email: String): AuthUserResponse {
+    private fun toAuthUserResponse(userId: UUID, name: String?, email: String): AuthUserResponse {
         val roleNames = userRoleRepository.findRoleNamesByUserId(userId)
             .map { it.uppercase() }
             .distinct()
@@ -117,6 +117,7 @@ class AuthService(
 
         return AuthUserResponse(
             id = userId.toString(),
+            name = name?.trim().takeUnless { it.isNullOrBlank() } ?: "",
             email = email,
             roles = roleNames,
             permissions = permissions
@@ -147,6 +148,7 @@ class AppUserDetailsService(
 
         return AuthUserPrincipal(
             userId = userId,
+            name = user.name?.trim().takeUnless { it.isNullOrBlank() } ?: "",
             email = user.email,
             passwordHash = user.passwordHash,
             active = user.active,
@@ -204,6 +206,7 @@ class AuthBootstrap(
         val user = userRepository.findByEmailIgnoreCase(email).orElseGet {
             userRepository.save(
                 AppUserEntity(
+                    name = "Administrador",
                     email = email,
                     passwordHash = passwordEncoder.encode(password),
                     active = true

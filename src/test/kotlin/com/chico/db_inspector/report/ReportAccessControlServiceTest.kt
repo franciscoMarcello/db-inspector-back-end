@@ -127,6 +127,7 @@ class ReportAccessControlServiceTest {
 
         val principal = AuthUserPrincipal(
             userId = userId,
+            name = "User Test",
             email = "user@test.com",
             passwordHash = "hash",
             active = true,

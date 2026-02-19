@@ -22,6 +22,8 @@ class AppUserEntity(
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     var id: UUID? = null,
+    @Column
+    var name: String? = null,
     @Column(nullable = false, unique = true)
     var email: String = "",
     @Column(name = "password_hash", nullable = false)
