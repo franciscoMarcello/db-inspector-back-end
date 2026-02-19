@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
+import org.slf4j.LoggerFactory
 import java.util.UUID
 
 @Service
@@ -14,6 +15,8 @@ class ReportAccessControlService(
     private val reportAclRepository: ReportAclRepository,
     private val properties: DbInspectorProperties
 ) {
+    private val log = LoggerFactory.getLogger(ReportAccessControlService::class.java)
+
     fun canViewFolder(folderId: UUID): Boolean = canAccessFolder(folderId, AccessAction.VIEW)
     fun canRunFolder(folderId: UUID): Boolean = canAccessFolder(folderId, AccessAction.RUN)
     fun canEditFolder(folderId: UUID): Boolean = canAccessFolder(folderId, AccessAction.EDIT)
@@ -49,9 +52,15 @@ class ReportAccessControlService(
         if (ctx.isAdmin) return true
 
         val entries = folderAclRepository.findAllByFolderId(folderId)
-        if (entries.isEmpty()) return !properties.security.aclDefaultDeny
+        if (entries.isEmpty()) {
+            val allowed = !properties.security.aclDefaultDeny
+            if (!allowed) {
+                log.debug("ACL deny folder={} action={} userId={} email={} reason=no_acl_entries_default_deny", folderId, action, ctx.userId, ctx.email)
+            }
+            return allowed
+        }
 
-        return entries.any { entry ->
+        val allowed = entries.any { entry ->
             subjectMatches(entry.subjectType, entry.subjectKey, ctx) && actionAllowed(
                 canView = entry.canView,
                 canRun = entry.canRun,
@@ -60,6 +69,10 @@ class ReportAccessControlService(
                 action = action
             )
         }
+        if (!allowed) {
+            log.debug("ACL deny folder={} action={} userId={} email={} reason=no_matching_subject_or_action", folderId, action, ctx.userId, ctx.email)
+        }
+        return allowed
     }
 
     private fun canAccessReport(report: ReportEntity, action: AccessAction): Boolean {
@@ -71,7 +84,13 @@ class ReportAccessControlService(
         val folderId = report.folder?.id
         val folderEntries = if (folderId != null) folderAclRepository.findAllByFolderId(folderId) else emptyList()
 
-        if (reportEntries.isEmpty() && folderEntries.isEmpty()) return !properties.security.aclDefaultDeny
+        if (reportEntries.isEmpty() && folderEntries.isEmpty()) {
+            val allowed = !properties.security.aclDefaultDeny
+            if (!allowed) {
+                log.debug("ACL deny report={} action={} userId={} email={} reason=no_acl_entries_default_deny", reportId, action, ctx.userId, ctx.email)
+            }
+            return allowed
+        }
 
         val allowedByReport = reportEntries.any { entry ->
             subjectMatches(entry.subjectType, entry.subjectKey, ctx) && actionAllowed(
@@ -93,7 +112,11 @@ class ReportAccessControlService(
             )
         }
 
-        return allowedByReport || allowedByFolder
+        val allowed = allowedByReport || allowedByFolder
+        if (!allowed) {
+            log.debug("ACL deny report={} action={} userId={} email={} reason=no_matching_subject_or_action", reportId, action, ctx.userId, ctx.email)
+        }
+        return allowed
     }
 
     private fun actionAllowed(
@@ -112,8 +135,15 @@ class ReportAccessControlService(
     private fun subjectMatches(subjectType: String, subjectKey: String, ctx: AccessContext): Boolean {
         val normalizedType = subjectType.trim().uppercase()
         return when (normalizedType) {
-            "USER" -> subjectKey.equals(ctx.userId.toString(), ignoreCase = true)
-            "ROLE" -> ctx.roleNames.contains(subjectKey.trim().uppercase())
+            "USER" -> {
+                val normalizedKey = subjectKey.trim()
+                normalizedKey.equals(ctx.userId.toString(), ignoreCase = true) ||
+                    normalizedKey.equals(ctx.email, ignoreCase = true)
+            }
+            "ROLE" -> {
+                val normalizedKey = normalizeRoleName(subjectKey)
+                ctx.roleNames.contains(normalizedKey)
+            }
             else -> false
         }
     }
@@ -134,13 +164,21 @@ class ReportAccessControlService(
 
         return AccessContext(
             userId = principal.userId,
+            email = principal.username,
             roleNames = roles,
             isAdmin = roles.contains("ADMIN")
         )
     }
 
+    private fun normalizeRoleName(rawRole: String): String =
+        rawRole
+            .trim()
+            .uppercase()
+            .removePrefix("ROLE_")
+
     private data class AccessContext(
         val userId: UUID,
+        val email: String,
         val roleNames: Set<String>,
         val isAdmin: Boolean
     )
