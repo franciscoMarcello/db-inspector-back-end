@@ -1,6 +1,7 @@
 package com.chico.dbinspector.report
 
 import com.chico.dbinspector.auth.AuthUserPrincipal
+import com.chico.dbinspector.config.DbInspectorProperties
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -15,10 +16,14 @@ class ReportAccessControlServiceTest {
 
     private val folderAclRepository = Mockito.mock(ReportFolderAclRepository::class.java)
     private val reportAclRepository = Mockito.mock(ReportAclRepository::class.java)
+    private val properties = DbInspectorProperties().apply {
+        security.aclDefaultDeny = false
+    }
 
     private val service = ReportAccessControlService(
         folderAclRepository = folderAclRepository,
-        reportAclRepository = reportAclRepository
+        reportAclRepository = reportAclRepository,
+        properties = properties
     )
 
     @AfterEach

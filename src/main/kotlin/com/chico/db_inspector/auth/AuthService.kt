@@ -3,6 +3,7 @@ package com.chico.dbinspector.auth
 import jakarta.transaction.Transactional
 import org.springframework.http.HttpStatus
 import org.springframework.security.authentication.AuthenticationManager
+import org.springframework.security.authentication.BadCredentialsException
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.Authentication
 import org.springframework.security.crypto.password.PasswordEncoder
@@ -18,21 +19,48 @@ class AuthService(
     private val userRoleRepository: UserRoleRepository,
     private val rolePermissionRepository: RolePermissionRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
+    private val loginRateLimiter: LoginRateLimiter,
+    private val adminAuditService: AdminAuditService,
     private val jwtService: JwtService,
     private val authenticationManager: AuthenticationManager
 ) {
     @Transactional
-    fun login(request: LoginRequest): AuthResponse {
-        val auth = authenticationManager.authenticate(
-            UsernamePasswordAuthenticationToken(
-                request.email.trim().lowercase(),
-                request.password
+    fun login(request: LoginRequest, clientIp: String): AuthResponse {
+        val normalizedEmail = request.email.trim().lowercase()
+        val limiterKey = "$normalizedEmail|$clientIp"
+        if (!loginRateLimiter.isAllowed(limiterKey)) {
+            throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Muitas tentativas de login. Tente novamente em instantes")
+        }
+
+        val auth = try {
+            authenticationManager.authenticate(
+                UsernamePasswordAuthenticationToken(
+                    normalizedEmail,
+                    request.password
+                )
             )
-        )
+        } catch (_: BadCredentialsException) {
+            loginRateLimiter.recordFailure(limiterKey)
+            adminAuditService.log(
+                action = "AUTH_LOGIN_FAILED",
+                targetType = "AUTH",
+                targetId = normalizedEmail,
+                details = mapOf("email" to normalizedEmail, "clientIp" to clientIp)
+            )
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais invalidas")
+        }
+
+        loginRateLimiter.clear(limiterKey)
         val principal = auth.principal as AuthUserPrincipal
         val user = userRepository.findById(principal.userId).orElseThrow {
             ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais invalidas")
         }
+        adminAuditService.log(
+            action = "AUTH_LOGIN_SUCCESS",
+            targetType = "USER",
+            targetId = user.id?.toString(),
+            details = mapOf("email" to user.email, "clientIp" to clientIp)
+        )
         return issueTokens(user)
     }
 

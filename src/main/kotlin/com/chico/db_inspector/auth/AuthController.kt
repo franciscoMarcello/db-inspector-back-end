@@ -1,6 +1,7 @@
 package com.chico.dbinspector.auth
 
 import jakarta.validation.Valid
+import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.GetMapping
@@ -15,7 +16,13 @@ class AuthController(
     private val authService: AuthService
 ) {
     @PostMapping("/login")
-    fun login(@Valid @RequestBody request: LoginRequest): AuthResponse = authService.login(request)
+    fun login(@Valid @RequestBody request: LoginRequest, servletRequest: HttpServletRequest): AuthResponse {
+        val forwarded = servletRequest.getHeader("X-Forwarded-For")
+        val clientIp = forwarded?.split(",")?.firstOrNull()?.trim().takeUnless { it.isNullOrBlank() }
+            ?: servletRequest.remoteAddr
+            ?: "unknown"
+        return authService.login(request, clientIp)
+    }
 
     @PostMapping("/refresh")
     fun refresh(@Valid @RequestBody request: RefreshRequest): AuthResponse = authService.refresh(request)

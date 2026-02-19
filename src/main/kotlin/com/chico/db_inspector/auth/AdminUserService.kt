@@ -15,6 +15,7 @@ class AdminUserService(
     private val userRoleRepository: UserRoleRepository,
     private val rolePermissionRepository: RolePermissionRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
+    private val auditService: AdminAuditService,
     private val passwordEncoder: PasswordEncoder
 ) {
     companion object {
@@ -54,6 +55,12 @@ class AdminUserService(
             .ifEmpty { listOf("USER") }
 
         assignRoles(user, roleNames)
+        auditService.log(
+            action = "ADMIN_USER_CREATE",
+            targetType = "USER",
+            targetId = user.id?.toString(),
+            details = mapOf("email" to user.email, "name" to user.name, "roles" to roleNames)
+        )
         return toAdminUserResponse(user)
     }
 
@@ -67,7 +74,14 @@ class AdminUserService(
                 refreshTokenRepository.save(it)
             }
         }
-        return toAdminUserResponse(userRepository.save(user))
+        val saved = userRepository.save(user)
+        auditService.log(
+            action = "ADMIN_USER_SET_ACTIVE",
+            targetType = "USER",
+            targetId = saved.id?.toString(),
+            details = mapOf("active" to active)
+        )
+        return toAdminUserResponse(saved)
     }
 
     @Transactional
@@ -76,7 +90,14 @@ class AdminUserService(
         val name = rawName.trim()
         require(name.isNotBlank()) { "Nome obrigatorio" }
         user.name = name
-        return toAdminUserResponse(userRepository.save(user))
+        val saved = userRepository.save(user)
+        auditService.log(
+            action = "ADMIN_USER_SET_NAME",
+            targetType = "USER",
+            targetId = saved.id?.toString(),
+            details = mapOf("name" to name)
+        )
+        return toAdminUserResponse(saved)
     }
 
     @Transactional
@@ -92,6 +113,11 @@ class AdminUserService(
             it.revoked = true
             refreshTokenRepository.save(it)
         }
+        auditService.log(
+            action = "ADMIN_USER_RESET_PASSWORD",
+            targetType = "USER",
+            targetId = id.toString()
+        )
     }
 
     @Transactional
@@ -100,6 +126,12 @@ class AdminUserService(
         val normalizedRole = roleName.trim().uppercase()
         require(normalizedRole.isNotBlank()) { "Role obrigatoria" }
         assignRoles(user, listOf(normalizedRole))
+        auditService.log(
+            action = "ADMIN_USER_ASSIGN_ROLE",
+            targetType = "USER",
+            targetId = user.id?.toString(),
+            details = mapOf("role" to normalizedRole)
+        )
         return toAdminUserResponse(user)
     }
 
@@ -111,6 +143,12 @@ class AdminUserService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "Role nao vinculada ao usuario")
         }
         userRoleRepository.delete(link)
+        auditService.log(
+            action = "ADMIN_USER_REMOVE_ROLE",
+            targetType = "USER",
+            targetId = user.id?.toString(),
+            details = mapOf("role" to normalizedRole)
+        )
         return toAdminUserResponse(user)
     }
 
@@ -121,6 +159,11 @@ class AdminUserService(
             it.revoked = true
             refreshTokenRepository.save(it)
         }
+        auditService.log(
+            action = "ADMIN_USER_REVOKE_TOKENS",
+            targetType = "USER",
+            targetId = userId.toString()
+        )
     }
 
     fun listRoles(): List<AdminRoleResponse> =
@@ -143,6 +186,12 @@ class AdminUserService(
         val role = roleRepository.save(RoleEntity(name = roleName))
         val roleId = role.id ?: error("Role sem id")
         syncRolePermissions(roleId, normalizePermissionCodes(request.permissions))
+        auditService.log(
+            action = "ADMIN_ROLE_CREATE",
+            targetType = "ROLE",
+            targetId = roleName,
+            details = mapOf("permissions" to request.permissions)
+        )
         return toAdminRoleResponse(role)
     }
 
@@ -171,6 +220,12 @@ class AdminUserService(
             }
             syncRolePermissions(roleId, normalized)
         }
+        auditService.log(
+            action = "ADMIN_ROLE_UPDATE",
+            targetType = "ROLE",
+            targetId = role.id?.toString(),
+            details = mapOf("name" to role.name, "permissions" to (request.permissions ?: emptyList<String>()))
+        )
 
         return toAdminRoleResponse(role)
     }
@@ -190,6 +245,11 @@ class AdminUserService(
 
         rolePermissionRepository.findAllByRoleId(roleId).forEach { rolePermissionRepository.delete(it) }
         roleRepository.delete(role)
+        auditService.log(
+            action = "ADMIN_ROLE_DELETE",
+            targetType = "ROLE",
+            targetId = role.name
+        )
     }
 
     private fun assignRoles(user: AppUserEntity, roleNames: List<String>) {

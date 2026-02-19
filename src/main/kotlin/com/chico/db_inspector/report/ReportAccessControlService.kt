@@ -1,6 +1,7 @@
 package com.chico.dbinspector.report
 
 import com.chico.dbinspector.auth.AuthUserPrincipal
+import com.chico.dbinspector.config.DbInspectorProperties
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
@@ -10,7 +11,8 @@ import java.util.UUID
 @Service
 class ReportAccessControlService(
     private val folderAclRepository: ReportFolderAclRepository,
-    private val reportAclRepository: ReportAclRepository
+    private val reportAclRepository: ReportAclRepository,
+    private val properties: DbInspectorProperties
 ) {
     fun canViewFolder(folderId: UUID): Boolean = canAccessFolder(folderId, AccessAction.VIEW)
     fun canRunFolder(folderId: UUID): Boolean = canAccessFolder(folderId, AccessAction.RUN)
@@ -47,7 +49,7 @@ class ReportAccessControlService(
         if (ctx.isAdmin) return true
 
         val entries = folderAclRepository.findAllByFolderId(folderId)
-        if (entries.isEmpty()) return true
+        if (entries.isEmpty()) return !properties.security.aclDefaultDeny
 
         return entries.any { entry ->
             subjectMatches(entry.subjectType, entry.subjectKey, ctx) && actionAllowed(
@@ -69,7 +71,7 @@ class ReportAccessControlService(
         val folderId = report.folder?.id
         val folderEntries = if (folderId != null) folderAclRepository.findAllByFolderId(folderId) else emptyList()
 
-        if (reportEntries.isEmpty() && folderEntries.isEmpty()) return true
+        if (reportEntries.isEmpty() && folderEntries.isEmpty()) return !properties.security.aclDefaultDeny
 
         val allowedByReport = reportEntries.any { entry ->
             subjectMatches(entry.subjectType, entry.subjectKey, ctx) && actionAllowed(

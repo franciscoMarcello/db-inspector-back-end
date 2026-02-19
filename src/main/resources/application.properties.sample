@@ -31,5 +31,8 @@ dbinspector.auth.jwt.access-ttl-minutes=15
 dbinspector.auth.refresh-ttl-days=7
 dbinspector.auth.bootstrap-admin.email=
 dbinspector.auth.bootstrap-admin.password=
+dbinspector.security.acl-default-deny=false
+dbinspector.security.login-max-attempts=5
+dbinspector.security.login-window-seconds=60
 
 CORS_EXTRA_ORIGIN=

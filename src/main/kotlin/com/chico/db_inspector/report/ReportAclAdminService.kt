@@ -1,6 +1,7 @@
 package com.chico.dbinspector.report
 
 import com.chico.dbinspector.auth.AppUserRepository
+import com.chico.dbinspector.auth.AdminAuditService
 import com.chico.dbinspector.auth.RoleRepository
 import jakarta.transaction.Transactional
 import org.springframework.http.HttpStatus
@@ -15,7 +16,8 @@ class ReportAclAdminService(
     private val folderAclRepository: ReportFolderAclRepository,
     private val reportAclRepository: ReportAclRepository,
     private val userRepository: AppUserRepository,
-    private val roleRepository: RoleRepository
+    private val roleRepository: RoleRepository,
+    private val auditService: AdminAuditService
 ) {
     fun listFolderAcl(folderId: UUID): List<ResourceAclResponse> {
         ensureFolder(folderId)
@@ -45,7 +47,21 @@ class ReportAclAdminService(
         }
 
         applyPermissions(entity, request)
-        return folderAclRepository.save(entity).toResponse()
+        val saved = folderAclRepository.save(entity)
+        auditService.log(
+            action = "ACL_FOLDER_UPSERT",
+            targetType = "REPORT_FOLDER",
+            targetId = folderId.toString(),
+            details = mapOf(
+                "subjectType" to normalized.type,
+                "subject" to normalized.key,
+                "canView" to request.canView,
+                "canRun" to request.canRun,
+                "canEdit" to request.canEdit,
+                "canDelete" to request.canDelete
+            )
+        )
+        return saved.toResponse()
     }
 
     @Transactional
@@ -66,7 +82,21 @@ class ReportAclAdminService(
         }
 
         applyPermissions(entity, request)
-        return reportAclRepository.save(entity).toResponse()
+        val saved = reportAclRepository.save(entity)
+        auditService.log(
+            action = "ACL_REPORT_UPSERT",
+            targetType = "REPORT",
+            targetId = reportId.toString(),
+            details = mapOf(
+                "subjectType" to normalized.type,
+                "subject" to normalized.key,
+                "canView" to request.canView,
+                "canRun" to request.canRun,
+                "canEdit" to request.canEdit,
+                "canDelete" to request.canDelete
+            )
+        )
+        return saved.toResponse()
     }
 
     @Transactional
@@ -81,6 +111,12 @@ class ReportAclAdminService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "ACL da pasta nao encontrada")
         }
         folderAclRepository.delete(entity)
+        auditService.log(
+            action = "ACL_FOLDER_DELETE",
+            targetType = "REPORT_FOLDER",
+            targetId = folderId.toString(),
+            details = mapOf("subjectType" to normalized.type, "subject" to normalized.key)
+        )
     }
 
     @Transactional
@@ -95,6 +131,12 @@ class ReportAclAdminService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "ACL do relatorio nao encontrada")
         }
         reportAclRepository.delete(entity)
+        auditService.log(
+            action = "ACL_REPORT_DELETE",
+            targetType = "REPORT",
+            targetId = reportId.toString(),
+            details = mapOf("subjectType" to normalized.type, "subject" to normalized.key)
+        )
     }
 
     private fun applyPermissions(entity: ReportFolderAclEntity, request: ResourceAclRequest) {
