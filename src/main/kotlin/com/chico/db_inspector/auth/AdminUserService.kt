@@ -19,7 +19,8 @@ class AdminUserService(
     private val passwordEncoder: PasswordEncoder
 ) {
     companion object {
-        private val protectedRoles = setOf("ADMIN", "USER")
+        private val protectedRoles = setOf("ADMIN")
+        private val permissionLockedRoles = setOf("ADMIN")
     }
 
     fun listUsers(): List<AdminUserResponse> =
@@ -52,7 +53,7 @@ class AdminUserService(
         val roleNames = request.roles
             .map { it.trim().uppercase() }
             .filter { it.isNotBlank() }
-            .ifEmpty { listOf("USER") }
+        require(roleNames.isNotEmpty()) { "Informe pelo menos uma role" }
 
         assignRoles(user, roleNames)
         auditService.log(
@@ -215,6 +216,9 @@ class AdminUserService(
 
         request.permissions?.let { permissionCodes ->
             val normalized = normalizePermissionCodes(permissionCodes)
+            if (permissionLockedRoles.contains(currentName)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Nao e permitido alterar permissoes da role ADMIN")
+            }
             if (protectedRoles.contains(currentName) && normalized.isEmpty()) {
                 throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Role de sistema nao pode ficar sem permissao")
             }

@@ -2,6 +2,7 @@ package com.chico.dbinspector.auth
 
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Size
 
 data class LoginRequest(
     @field:Email
@@ -46,7 +47,8 @@ data class AdminCreateUserRequest(
     @field:NotBlank
     val password: String,
     val active: Boolean = true,
-    val roles: List<String> = listOf("USER")
+    @field:Size(min = 1)
+    val roles: List<String>
 )
 
 data class AdminSetUserActiveRequest(

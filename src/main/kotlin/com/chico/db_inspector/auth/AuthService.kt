@@ -212,21 +212,6 @@ class AuthBootstrap(
             permissionByCode = permissionByCode
         )
 
-        ensureRoleWithPermissions(
-            roleName = "USER",
-            permissionCodes = listOf(
-                PermissionCodes.REPORT_READ,
-                PermissionCodes.REPORT_RUN,
-                PermissionCodes.FOLDER_READ,
-                PermissionCodes.TEMPLATE_READ,
-                PermissionCodes.SQL_METADATA_READ,
-                PermissionCodes.EMAIL_SEND,
-                PermissionCodes.EMAIL_TEST,
-                PermissionCodes.EMAIL_SCHEDULE_READ
-            ),
-            permissionByCode = permissionByCode
-        )
-
         val email = adminEmail.trim().lowercase()
         val password = adminPassword.trim()
         if (email.isBlank() || password.isBlank()) return
