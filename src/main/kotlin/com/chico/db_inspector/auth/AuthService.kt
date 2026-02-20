@@ -215,8 +215,11 @@ class AuthBootstrap(
         val email = adminEmail.trim().lowercase()
         val password = adminPassword.trim()
         if (email.isBlank() || password.isBlank()) return
-
-        val user = userRepository.findByEmailIgnoreCase(email).orElseGet {
+        val existing = userRepository.findByEmailIgnoreCase(email)
+        val user = existing.orElseGet {
+            require(PasswordPolicy.isValid(password)) {
+                "dbinspector.auth.bootstrap-admin.password nao atende politica de senha forte"
+            }
             userRepository.save(
                 AppUserEntity(
                     name = "Administrador",

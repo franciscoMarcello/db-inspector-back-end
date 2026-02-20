@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter
 
 data class EmailSendResult(
     val previewRows: Int,
-    val attachedCsv: Boolean
+    val attachedXlsx: Boolean
 )
 
 @Service
@@ -33,31 +33,35 @@ class EmailReportService(
         val tabular = EmailReportFormatter.toTabular(queryResult)
         val prettyJson = EmailReportFormatter.prettyJson(mapper, queryResult)
         val html = EmailReportFormatter.buildHtmlPreview(tabular, properties.schedule.previewLimit, prettyJson)
-        val csvBytes = tabular?.let { EmailReportFormatter.buildCsv(it, properties.schedule.attachmentRowLimit) }
+        val xlsxBytes = tabular?.let { EmailReportFormatter.buildXlsx(it, properties.schedule.attachmentRowLimit) }
 
-        val attachCsv = csvBytes != null && csvBytes.size <= properties.schedule.attachmentSizeLimitBytes
+        val attachXlsx = xlsxBytes != null && xlsxBytes.size <= properties.schedule.attachmentSizeLimitBytes
         val subject = request.subject?.takeIf { it.isNotBlank() }
             ?: "DB Inspector Report - ${LocalDateTime.now().format(subjectFmt)}"
 
         val mimeMessage = mailSender.createMimeMessage()
-        val helper = MimeMessageHelper(mimeMessage, attachCsv, "UTF-8")
+        val helper = MimeMessageHelper(mimeMessage, attachXlsx, "UTF-8")
         helper.setFrom(properties.mail.from)
         helper.setTo(to.toTypedArray())
         if (cc.isNotEmpty()) helper.setCc(cc.toTypedArray())
         helper.setSubject(subject)
         helper.setText(html, true)
 
-        if (attachCsv && csvBytes != null) {
-            helper.addAttachment("report.csv", ByteArrayResource(csvBytes))
+        if (attachXlsx && xlsxBytes != null) {
+            helper.addAttachment(
+                "report.xlsx",
+                ByteArrayResource(xlsxBytes),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         }
         val previewRows = tabular?.rows?.size?.coerceAtMost(properties.schedule.previewLimit) ?: 0
         mailSender.send(mimeMessage)
         log.info(
-            "Email report sent to={}, cc={}, previewRows={}, attachedCsv={}",
-            to, cc, previewRows, attachCsv
+            "Email report sent to={}, cc={}, previewRows={}, attachedXlsx={}",
+            to, cc, previewRows, attachXlsx
         )
 
-        return EmailSendResult(previewRows = previewRows, attachedCsv = attachCsv)
+        return EmailSendResult(previewRows = previewRows, attachedXlsx = attachXlsx)
     }
 
     fun sendTestEmail(request: EmailTestRequest) {

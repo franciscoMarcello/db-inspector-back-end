@@ -52,7 +52,7 @@ class EmailReportController(
             mapOf(
                 "status" to "sent",
                 "previewRows" to sendResult.previewRows,
-                "attachedCsv" to sendResult.attachedCsv
+                "attachedXlsx" to sendResult.attachedXlsx
             )
         )
     }

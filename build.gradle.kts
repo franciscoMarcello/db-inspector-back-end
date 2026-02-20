@@ -27,6 +27,7 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 	implementation("org.springframework.boot:spring-boot-starter-quartz")
 	implementation("org.springframework.boot:spring-boot-starter-security")
+	implementation("org.apache.poi:poi-ooxml:5.4.1")
 	implementation("io.jsonwebtoken:jjwt-api:0.12.6")
 	implementation("net.sf.jasperreports:jasperreports:7.0.3")
 	implementation("net.sf.jasperreports:jasperreports-pdf:7.0.3")

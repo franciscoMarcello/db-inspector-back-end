@@ -45,6 +45,7 @@ data class AdminCreateUserRequest(
     @field:NotBlank
     val email: String,
     @field:NotBlank
+    @field:Size(min = 10)
     val password: String,
     val active: Boolean = true,
     @field:Size(min = 1)
@@ -62,6 +63,7 @@ data class AdminSetUserNameRequest(
 
 data class AdminResetPasswordRequest(
     @field:NotBlank
+    @field:Size(min = 10)
     val password: String
 )
 

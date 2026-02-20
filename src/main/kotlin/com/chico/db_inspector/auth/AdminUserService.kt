@@ -35,7 +35,7 @@ class AdminUserService(
         val email = request.email.trim().lowercase()
         require(email.isNotBlank()) { "Email obrigatorio" }
         val password = request.password.trim()
-        require(password.length >= 6) { "Senha deve ter pelo menos 6 caracteres" }
+        PasswordPolicy.validateOrThrow(password)
 
         if (userRepository.findByEmailIgnoreCase(email).isPresent) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Ja existe usuario com esse email")
@@ -105,7 +105,7 @@ class AdminUserService(
     fun resetPassword(id: UUID, rawPassword: String) {
         val user = findUser(id)
         val password = rawPassword.trim()
-        require(password.length >= 6) { "Senha deve ter pelo menos 6 caracteres" }
+        PasswordPolicy.validateOrThrow(password)
 
         user.passwordHash = passwordEncoder.encode(password)
         userRepository.save(user)
