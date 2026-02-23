@@ -658,6 +658,10 @@ class ReportService(
         val properties = JRPropertiesUtil.getInstance(context)
         properties.setProperty("net.sf.jasperreports.compiler.class", JASPER_JDT_COMPILER)
         properties.setProperty("net.sf.jasperreports.compiler.java", JASPER_JDT_COMPILER)
+        properties.setProperty("net.sf.jasperreports.default.font.name", "DejaVu Sans")
+        properties.setProperty("net.sf.jasperreports.default.pdf.font.name", "DejaVu Sans")
+        properties.setProperty("net.sf.jasperreports.default.pdf.encoding", "Identity-H")
+        properties.setProperty("net.sf.jasperreports.default.pdf.embedded", "true")
     }
 
     private fun loadLogoBytes(): ByteArray? {
