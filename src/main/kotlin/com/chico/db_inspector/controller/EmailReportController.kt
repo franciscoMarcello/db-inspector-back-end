@@ -50,7 +50,8 @@ class EmailReportController(
         val sendResult = scheduler.sendNow(body, ctx, query)
         return ResponseEntity.ok(
             mapOf(
-                "status" to "sent",
+                "status" to if (sendResult.sent) "sent" else "skipped",
+                "reason" to if (sendResult.sent) null else "no_data",
                 "previewRows" to sendResult.previewRows,
                 "attachedXlsx" to sendResult.attachedXlsx
             )

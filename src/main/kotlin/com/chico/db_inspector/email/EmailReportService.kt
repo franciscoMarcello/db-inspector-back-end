@@ -12,7 +12,8 @@ import java.time.format.DateTimeFormatter
 
 data class EmailSendResult(
     val previewRows: Int,
-    val attachedXlsx: Boolean
+    val attachedXlsx: Boolean,
+    val sent: Boolean
 )
 
 @Service
@@ -29,6 +30,14 @@ class EmailReportService(
         val to = parseEmails(request.to)
         val cc = parseEmails(request.cc)
         require(to.isNotEmpty()) { "Campo 'to' sem emails válidos" }
+        if (!hasDataRows(queryResult)) {
+            log.info("Email report skipped to={}, cc={} reason=no_data_rows", to, cc)
+            return EmailSendResult(
+                previewRows = 0,
+                attachedXlsx = false,
+                sent = false
+            )
+        }
 
         val tabular = EmailReportFormatter.toTabular(queryResult)
         val prettyJson = EmailReportFormatter.prettyJson(mapper, queryResult)
@@ -61,7 +70,11 @@ class EmailReportService(
             to, cc, previewRows, attachXlsx
         )
 
-        return EmailSendResult(previewRows = previewRows, attachedXlsx = attachXlsx)
+        return EmailSendResult(
+            previewRows = previewRows,
+            attachedXlsx = attachXlsx,
+            sent = true
+        )
     }
 
     fun sendTestEmail(request: EmailTestRequest) {
@@ -91,5 +104,17 @@ class EmailReportService(
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .filter { emailRegex.matches(it) }
+    }
+
+    private fun hasDataRows(queryResult: Map<String, Any?>): Boolean {
+        val data = queryResult["data"] as? List<*> ?: return false
+        return data.any { row ->
+            when (row) {
+                is Map<*, *> -> row.isNotEmpty()
+                is List<*> -> row.isNotEmpty()
+                null -> false
+                else -> true
+            }
+        }
     }
 }
