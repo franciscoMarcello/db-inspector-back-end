@@ -15,6 +15,7 @@ interface ReportFolderAclRepository : JpaRepository<ReportFolderAclEntity, UUID>
 
 interface ReportAclRepository : JpaRepository<ReportAclEntity, UUID> {
     fun findAllByReportId(reportId: UUID): List<ReportAclEntity>
+    fun findAllByReportFolderId(folderId: UUID): List<ReportAclEntity>
     fun findByReportIdAndSubjectTypeAndSubjectKeyIgnoreCase(
         reportId: UUID,
         subjectType: String,

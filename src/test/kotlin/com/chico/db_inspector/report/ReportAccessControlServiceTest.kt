@@ -60,6 +60,33 @@ class ReportAccessControlServiceTest {
     }
 
     @Test
+    fun `canViewFolder should allow when report acl inside folder allows user`() {
+        val userId = UUID.randomUUID()
+        authenticate(userId, roles = setOf("USER"), permissions = emptySet())
+
+        val folderId = UUID.randomUUID()
+        val folderAclDeny = ReportFolderAclEntity(
+            id = UUID.randomUUID(),
+            subjectType = "USER",
+            subjectKey = userId.toString(),
+            canView = false,
+            canRun = false
+        )
+        val reportAclAllow = ReportAclEntity(
+            id = UUID.randomUUID(),
+            subjectType = "USER",
+            subjectKey = userId.toString(),
+            canView = true,
+            canRun = true
+        )
+
+        Mockito.`when`(folderAclRepository.findAllByFolderId(folderId)).thenReturn(listOf(folderAclDeny))
+        Mockito.`when`(reportAclRepository.findAllByReportFolderId(folderId)).thenReturn(listOf(reportAclAllow))
+
+        assertTrue(service.canViewFolder(folderId))
+    }
+
+    @Test
     fun `canRunReport should allow by role acl`() {
         val userId = UUID.randomUUID()
         authenticate(userId, roles = setOf("MANAGER"), permissions = emptySet())
@@ -71,6 +98,7 @@ class ReportAccessControlServiceTest {
             id = UUID.randomUUID(),
             subjectType = "ROLE",
             subjectKey = "MANAGER",
+            canView = true,
             canRun = true
         )
         Mockito.`when`(reportAclRepository.findAllByReportId(reportId)).thenReturn(listOf(roleAcl))
@@ -93,6 +121,7 @@ class ReportAccessControlServiceTest {
             folder = folder,
             subjectType = "USER",
             subjectKey = userId.toString(),
+            canView = true,
             canRun = true
         )
 
@@ -100,6 +129,58 @@ class ReportAccessControlServiceTest {
         Mockito.`when`(folderAclRepository.findAllByFolderId(folderId)).thenReturn(listOf(folderAcl))
 
         assertTrue(service.canRunReport(report))
+    }
+
+    @Test
+    fun `canRunReport should deny when report acl matches user without run even if folder allows`() {
+        val userId = UUID.randomUUID()
+        authenticate(userId, roles = setOf("USER"), permissions = emptySet())
+
+        val folderId = UUID.randomUUID()
+        val reportId = UUID.randomUUID()
+        val folder = ReportFolderEntity(id = folderId)
+        val report = ReportEntity(id = reportId, folder = folder)
+
+        val reportDeny = ReportAclEntity(
+            id = UUID.randomUUID(),
+            subjectType = "USER",
+            subjectKey = userId.toString(),
+            canView = false,
+            canRun = false
+        )
+        val folderAllow = ReportFolderAclEntity(
+            id = UUID.randomUUID(),
+            folder = folder,
+            subjectType = "USER",
+            subjectKey = userId.toString(),
+            canView = true,
+            canRun = true
+        )
+
+        Mockito.`when`(reportAclRepository.findAllByReportId(reportId)).thenReturn(listOf(reportDeny))
+        Mockito.`when`(folderAclRepository.findAllByFolderId(folderId)).thenReturn(listOf(folderAllow))
+
+        assertFalse(service.canRunReport(report))
+    }
+
+    @Test
+    fun `canViewReport should deny when report acl has view without run`() {
+        val userId = UUID.randomUUID()
+        authenticate(userId, roles = setOf("USER"), permissions = emptySet())
+
+        val reportId = UUID.randomUUID()
+        val report = ReportEntity(id = reportId)
+        val reportAcl = ReportAclEntity(
+            id = UUID.randomUUID(),
+            subjectType = "USER",
+            subjectKey = userId.toString(),
+            canView = true,
+            canRun = false
+        )
+
+        Mockito.`when`(reportAclRepository.findAllByReportId(reportId)).thenReturn(listOf(reportAcl))
+
+        assertFalse(service.canViewReport(report))
     }
 
     @Test

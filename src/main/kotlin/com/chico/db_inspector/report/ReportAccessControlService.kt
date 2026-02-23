@@ -69,6 +69,22 @@ class ReportAccessControlService(
                 action = action
             )
         }
+        if (!allowed && action == AccessAction.VIEW) {
+            val allowedByReportInheritance = reportAclRepository.findAllByReportFolderId(folderId)
+                .any { entry ->
+                    subjectMatches(entry.subjectType, entry.subjectKey, ctx) && actionAllowed(
+                        canView = entry.canView,
+                        canRun = entry.canRun,
+                        canEdit = entry.canEdit,
+                        canDelete = entry.canDelete,
+                        action = AccessAction.VIEW
+                    )
+                }
+            if (allowedByReportInheritance) {
+                log.debug("ACL folder view granted by report acl inheritance folder={} userId={} email={}", folderId, ctx.userId, ctx.email)
+                return true
+            }
+        }
         if (!allowed) {
             log.debug("ACL deny folder={} action={} userId={} email={} reason=no_matching_subject_or_action", folderId, action, ctx.userId, ctx.email)
         }
@@ -92,14 +108,25 @@ class ReportAccessControlService(
             return allowed
         }
 
-        val allowedByReport = reportEntries.any { entry ->
-            subjectMatches(entry.subjectType, entry.subjectKey, ctx) && actionAllowed(
+        val matchingReportEntries = reportEntries.filter { entry ->
+            subjectMatches(entry.subjectType, entry.subjectKey, ctx)
+        }
+
+        val allowedByReport = matchingReportEntries.any { entry ->
+            actionAllowed(
                 canView = entry.canView,
                 canRun = entry.canRun,
                 canEdit = entry.canEdit,
                 canDelete = entry.canDelete,
                 action = action
             )
+        }
+        // Report ACL takes precedence when there is a direct match for subject.
+        if (matchingReportEntries.isNotEmpty()) {
+            if (!allowedByReport) {
+                log.debug("ACL deny report={} action={} userId={} email={} reason=report_acl_matched_but_denied", reportId, action, ctx.userId, ctx.email)
+            }
+            return allowedByReport
         }
 
         val allowedByFolder = folderEntries.any { entry ->
@@ -126,8 +153,8 @@ class ReportAccessControlService(
         canDelete: Boolean,
         action: AccessAction
     ): Boolean = when (action) {
-        AccessAction.VIEW -> canView || canRun || canEdit || canDelete
-        AccessAction.RUN -> canRun || canEdit || canDelete
+        AccessAction.VIEW -> canView && canRun
+        AccessAction.RUN -> canView && canRun
         AccessAction.EDIT -> canEdit || canDelete
         AccessAction.DELETE -> canDelete
     }
