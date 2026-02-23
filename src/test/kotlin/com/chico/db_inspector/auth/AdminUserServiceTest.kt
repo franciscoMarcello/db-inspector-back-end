@@ -104,9 +104,9 @@ class AdminUserServiceTest {
         Mockito.`when`(refreshTokenRepository.findAllByUserIdAndRevokedFalse(userId)).thenReturn(listOf(token))
         Mockito.`when`(userRepository.save(Mockito.any(AppUserEntity::class.java))).thenAnswer { it.arguments[0] }
 
-        service.resetPassword(userId, "nova-senha-123")
+        service.resetPassword(userId, "Nova-senha-123")
 
-        assertTrue(passwordEncoder.matches("nova-senha-123", user.passwordHash))
+        assertTrue(passwordEncoder.matches("Nova-senha-123", user.passwordHash))
         assertTrue(token.revoked)
         Mockito.verify(refreshTokenRepository).save(token)
     }

@@ -4,7 +4,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.web.server.ResponseStatusException
 
 object PasswordPolicy {
-    private const val MIN_LENGTH = 10
+    private const val MIN_LENGTH = 8
 
     private val upperRegex = Regex("[A-Z]")
     private val lowerRegex = Regex("[a-z]")
@@ -28,5 +28,5 @@ object PasswordPolicy {
             !whitespaceRegex.containsMatchIn(password)
 
     fun validationMessage(): String =
-        "Senha deve ter no minimo 10 caracteres, incluindo letra maiuscula, letra minuscula, numero e caractere especial, sem espacos"
+        "Senha deve ter no minimo 8 caracteres, incluindo letra maiuscula, letra minuscula, numero e caractere especial, sem espacos"
 }
