@@ -555,8 +555,12 @@ class ReportService(
     }
 
     private fun toSqlLiteral(variable: ReportVariableEntity, rawValue: Any?): String {
-        if (rawValue == null) return "NULL"
-        if (!variable.multiple) return toSingleSqlLiteral(variable, rawValue)
+        if (!variable.multiple) {
+            if (rawValue == null) return "NULL"
+            return toSingleSqlLiteral(variable, rawValue)
+        }
+
+        if (rawValue == null) return "(NULL)"
 
         val items = when (rawValue) {
             is Collection<*> -> rawValue.toList()
