@@ -9,7 +9,8 @@ data class DbInspectorProperties(
     var environment: String = "Prod",
     var mail: MailProperties = MailProperties(),
     var schedule: ScheduleProperties = ScheduleProperties(),
-    var reports: ReportsProperties = ReportsProperties()
+    var reports: ReportsProperties = ReportsProperties(),
+    var security: SecurityProperties = SecurityProperties()
 ) {
     data class MailProperties(
         var from: String = "no-reply@dbinspector.local"
@@ -25,5 +26,11 @@ data class DbInspectorProperties(
 
     data class ReportsProperties(
         var maxRows: Int = 500
+    )
+
+    data class SecurityProperties(
+        var aclDefaultDeny: Boolean = false,
+        var loginMaxAttempts: Int = 5,
+        var loginWindowSeconds: Int = 60
     )
 }

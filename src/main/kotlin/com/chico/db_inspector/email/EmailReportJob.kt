@@ -35,7 +35,7 @@ class EmailReportJob(
                 asDict = asDict,
                 withDescription = withDescription
             )
-            emailService.sendReport(
+            val sendResult = emailService.sendReport(
                 EmailReportRequest(
                     sql = sql,
                     to = to,
@@ -48,7 +48,13 @@ class EmailReportJob(
                 ),
                 result
             )
-            log.info("Quartz job executed scheduleId={}", context.jobDetail.key.name)
+            log.info(
+                "Quartz job executed scheduleId={} sent={} previewRows={} attachedXlsx={}",
+                context.jobDetail.key.name,
+                sendResult.sent,
+                sendResult.previewRows,
+                sendResult.attachedXlsx
+            )
         } catch (ex: Exception) {
             log.error("Quartz job failed scheduleId={}", context.jobDetail.key.name, ex)
             throw ex

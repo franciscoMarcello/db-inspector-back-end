@@ -223,6 +223,7 @@ class ReportServiceQueryTemplateTest {
         val reportRepository = Mockito.mock(ReportRepository::class.java)
         val folderRepository = Mockito.mock(ReportFolderRepository::class.java)
         val jasperTemplateRepository = Mockito.mock(ReportJasperTemplateRepository::class.java)
+        val accessControl = Mockito.mock(ReportAccessControlService::class.java)
         val sqlExecClient = SqlExecClient(
             WebClient.builder()
                 .exchangeFunction(ExchangeFunction { Mono.just(ClientResponse.create(HttpStatus.INTERNAL_SERVER_ERROR).build()) })
@@ -233,6 +234,7 @@ class ReportServiceQueryTemplateTest {
             repository = reportRepository,
             folderRepository = folderRepository,
             jasperTemplateRepository = jasperTemplateRepository,
+            accessControl = accessControl,
             sqlExecClient = sqlExecClient,
             properties = DbInspectorProperties()
         )

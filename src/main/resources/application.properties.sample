@@ -19,10 +19,20 @@ spring.quartz.properties.org.quartz.jobStore.driverDelegateClass=
 spring.quartz.properties.org.quartz.threadPool.threadCount=
 
 dbinspector.mail.from=
+dbinspector.sql-exec-base-url=
+dbinspector.apitoken=
 dbinspector.schedule.preview-limit=
 dbinspector.schedule.attachment-row-limit=
 dbinspector.schedule.attachment-size-limit-bytes=
 dbinspector.schedule.sql-timeout-ms=
 dbinspector.schedule.time-zone=America/Porto_Velho
+dbinspector.auth.jwt.secret=
+dbinspector.auth.jwt.access-ttl-minutes=15
+dbinspector.auth.refresh-ttl-days=7
+dbinspector.auth.bootstrap-admin.email=
+dbinspector.auth.bootstrap-admin.password=
+dbinspector.security.acl-default-deny=false
+dbinspector.security.login-max-attempts=5
+dbinspector.security.login-window-seconds=60
 
 CORS_EXTRA_ORIGIN=

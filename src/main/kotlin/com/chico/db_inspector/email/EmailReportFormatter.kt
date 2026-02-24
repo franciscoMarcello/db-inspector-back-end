@@ -2,6 +2,7 @@ package com.chico.dbinspector.email
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.SerializationFeature
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.nio.charset.StandardCharsets
 
 data class TabularResult(
@@ -79,6 +80,36 @@ object EmailReportFormatter {
         }
         val csv = if (rows.isBlank()) header else "$header\n$rows"
         return csv.toByteArray(StandardCharsets.UTF_8)
+    }
+
+    fun buildXlsx(
+        tabular: TabularResult,
+        maxRows: Int
+    ): ByteArray {
+        val workbook = XSSFWorkbook()
+        return workbook.use { wb ->
+            val sheet = wb.createSheet("report")
+            val header = sheet.createRow(0)
+            tabular.columns.forEachIndexed { index, column ->
+                header.createCell(index).setCellValue(column)
+            }
+
+            tabular.rows.take(maxRows).forEachIndexed { rowIndex, rowValues ->
+                val row = sheet.createRow(rowIndex + 1)
+                rowValues.forEachIndexed { colIndex, value ->
+                    row.createCell(colIndex).setCellValue(value?.toString() ?: "")
+                }
+            }
+
+            tabular.columns.indices.forEach { col ->
+                sheet.autoSizeColumn(col)
+            }
+
+            java.io.ByteArrayOutputStream().use { output ->
+                wb.write(output)
+                output.toByteArray()
+            }
+        }
     }
 
     fun prettyJson(mapper: ObjectMapper, result: Map<String, Any?>): String {

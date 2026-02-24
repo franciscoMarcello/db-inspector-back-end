@@ -6,6 +6,7 @@ import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.web.bind.annotation.*
 
 @RestController
@@ -17,6 +18,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     }
 
     @GetMapping("/schemas", produces = [MediaType.APPLICATION_JSON_VALUE])
+    @PreAuthorize("hasAuthority('SQL_METADATA_READ')")
     fun listSchemas(ctx: UpstreamContext): Any {
         val query = """
             SELECT schema_name
@@ -28,6 +30,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     }
 
     @GetMapping("/{schema}/tables", produces = [MediaType.APPLICATION_JSON_VALUE])
+    @PreAuthorize("hasAuthority('SQL_METADATA_READ')")
     fun listTables(@PathVariable schema: String, ctx: UpstreamContext): Any {
         val query = """
             SELECT table_name
@@ -40,6 +43,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     }
 
     @GetMapping("/{schema}/{table}/details", produces = [MediaType.APPLICATION_JSON_VALUE])
+    @PreAuthorize("hasAuthority('SQL_METADATA_READ')")
     fun tableDetails(@PathVariable schema: String, @PathVariable table: String, ctx: UpstreamContext): Any {
         val query = """
             WITH cols AS (
@@ -88,6 +92,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     }
 
     @GetMapping("/{schema}/{table}/relations", produces = [MediaType.APPLICATION_JSON_VALUE])
+    @PreAuthorize("hasAuthority('SQL_METADATA_READ')")
     fun tableRelations(@PathVariable schema: String, @PathVariable table: String, ctx: UpstreamContext): Any {
         val query = """
             SELECT
@@ -118,6 +123,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     }
 
     @PostMapping("/query", consumes = [MediaType.APPLICATION_JSON_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    @PreAuthorize("hasAuthority('SQL_QUERY_EXECUTE')")
     fun runQuery(@RequestBody body: SqlQuery, ctx: UpstreamContext): ResponseEntity<Any> {
         val q = body.query.trim()
         require(q.isNotEmpty()) { "SQL nao pode ser vazia" }
@@ -144,6 +150,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     }
 
     @PostMapping("/query/all", consumes = [MediaType.APPLICATION_JSON_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    @PreAuthorize("hasAuthority('SQL_QUERY_EXECUTE')")
     fun runQueryAll(@RequestBody body: SqlQuery, ctx: UpstreamContext): ResponseEntity<Any> {
         val q = body.query.trim()
         require(q.isNotEmpty()) { "SQL nao pode ser vazia" }

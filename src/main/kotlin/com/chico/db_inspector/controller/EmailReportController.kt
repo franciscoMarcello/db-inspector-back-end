@@ -8,6 +8,7 @@ import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
@@ -21,6 +22,7 @@ class EmailReportController(
 ) {
 
     @PostMapping("/send")
+    @PreAuthorize("hasAuthority('EMAIL_SEND')")
     fun sendReport(
         @Valid @RequestBody body: EmailReportRequest,
         ctx: UpstreamContext
@@ -48,14 +50,16 @@ class EmailReportController(
         val sendResult = scheduler.sendNow(body, ctx, query)
         return ResponseEntity.ok(
             mapOf(
-                "status" to "sent",
+                "status" to if (sendResult.sent) "sent" else "skipped",
+                "reason" to if (sendResult.sent) null else "no_data",
                 "previewRows" to sendResult.previewRows,
-                "attachedCsv" to sendResult.attachedCsv
+                "attachedXlsx" to sendResult.attachedXlsx
             )
         )
     }
 
     @PostMapping("/test")
+    @PreAuthorize("hasAuthority('EMAIL_TEST')")
     fun sendTest(
         @Valid @RequestBody body: EmailTestRequest
     ): ResponseEntity<Any> {

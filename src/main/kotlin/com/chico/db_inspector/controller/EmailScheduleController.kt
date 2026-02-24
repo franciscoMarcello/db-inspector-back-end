@@ -7,6 +7,7 @@ import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -22,12 +23,15 @@ class EmailScheduleController(
     private val scheduler: EmailReportScheduler
 ) {
     @GetMapping
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_READ')")
     fun list(): List<EmailScheduleResponse> = scheduler.listSchedules()
 
     @GetMapping("/{id}")
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_READ')")
     fun get(@PathVariable id: String): EmailScheduleResponse = scheduler.getSchedule(id)
 
     @PostMapping
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_WRITE')")
     fun create(
         @Valid @RequestBody body: EmailReportRequest,
         ctx: UpstreamContext
@@ -42,6 +46,7 @@ class EmailScheduleController(
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_WRITE')")
     fun update(
         @PathVariable id: String,
         @Valid @RequestBody body: EmailReportRequest,
@@ -57,18 +62,21 @@ class EmailScheduleController(
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_WRITE')")
     fun delete(@PathVariable id: String): ResponseEntity<Void> {
         scheduler.deleteSchedule(id)
         return ResponseEntity.noContent().build()
     }
 
     @PostMapping("/{id}/pause")
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_WRITE')")
     fun pause(@PathVariable id: String): ResponseEntity<Void> {
         scheduler.pauseSchedule(id)
         return ResponseEntity.noContent().build()
     }
 
     @PostMapping("/{id}/resume")
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_WRITE')")
     fun resume(@PathVariable id: String): ResponseEntity<Void> {
         scheduler.resumeSchedule(id)
         return ResponseEntity.noContent().build()
