@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.iml
+
+# Build
+build
+.gradle
+out
+target
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / configs sensíveis
+.env
+*.env
+application.properties
+src/main/resources/application.properties
+application-prod.properties
+application-local.properties
+application-secret.properties
+*.pem
+*.key
+*.p12
+*.jks
+
+# Node (se tiver front misturado)
+node_modules
+
+# Docker
+Dockerfile*
+docker-compose*

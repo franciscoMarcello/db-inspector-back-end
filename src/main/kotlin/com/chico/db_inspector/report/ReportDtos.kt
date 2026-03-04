@@ -87,6 +87,8 @@ data class ReportRunMeta(
     val environment: String,
     val generatedAt: String,
     val lastRunAt: String,
+    val page: Int,
+    val size: Int,
     val rowCount: Int,
     val elapsedMs: Long,
     val truncated: Boolean
@@ -99,7 +101,9 @@ data class ReportSummary(
 
 data class ReportRunRequest(
     val params: Map<String, Any?> = emptyMap(),
-    val safe: Boolean = false
+    val safe: Boolean = false,
+    val page: Int? = 0,
+    val size: Int? = 200
 )
 
 data class ReportValidationRequest(

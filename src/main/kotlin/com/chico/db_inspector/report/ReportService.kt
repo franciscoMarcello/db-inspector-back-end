@@ -47,6 +47,8 @@ class ReportService(
     companion object {
         private const val LOGO_RESOURCE_PATH = "reports/logo.png"
         private const val JASPER_JDT_COMPILER = "net.sf.jasperreports.jdt.JRJdtCompiler"
+        private const val DEFAULT_PAGE_SIZE = 200
+        private const val MAX_PAGE_SIZE = 1_000
     }
 
     private val log = LoggerFactory.getLogger(ReportService::class.java)
@@ -114,22 +116,21 @@ class ReportService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
         accessControl.requireReportAccess(entity, AccessAction.RUN)
-        val execution = executeReport(entity, ctx, request.params)
-
-        val totalRows = execution.allRows.size
-        val maxRows = properties.reports.maxRows
-        val truncated = totalRows > maxRows
-        val rows = if (truncated) execution.allRows.take(maxRows) else execution.allRows
-        val summaries = computeSummaries(execution.columns, execution.allRows)
+        val page = (request.page ?: 0).coerceAtLeast(0)
+        val size = (request.size ?: DEFAULT_PAGE_SIZE).coerceIn(1, MAX_PAGE_SIZE)
+        val execution = executeReportPage(entity, ctx, request.params, page, size)
+        val summaries = computeSummaries(execution.columns, execution.rows)
 
         val now = ZonedDateTime.now(clock)
         val meta = ReportRunMeta(
             environment = properties.environment,
             generatedAt = now.format(timestampFormatter),
             lastRunAt = now.format(timestampFormatter),
-            rowCount = totalRows,
+            page = page,
+            size = size,
+            rowCount = execution.rowCount,
             elapsedMs = execution.elapsedMs,
-            truncated = truncated
+            truncated = execution.rowCount > ((page * size) + execution.rows.size)
         )
 
         return ReportRunResponse(
@@ -137,7 +138,38 @@ class ReportService(
             meta = meta,
             query = execution.query,
             columns = execution.columns,
-            rows = rows,
+            rows = execution.rows,
+            summaries = summaries
+        )
+    }
+
+    fun runAll(id: UUID, ctx: UpstreamContext, request: ReportRunRequest): ReportRunResponse {
+        val entity = repository.findById(id).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        val execution = executeReport(entity, ctx, request.params)
+        val summaries = computeSummaries(execution.columns, execution.allRows)
+        val totalRows = execution.allRows.size
+
+        val now = ZonedDateTime.now(clock)
+        val meta = ReportRunMeta(
+            environment = properties.environment,
+            generatedAt = now.format(timestampFormatter),
+            lastRunAt = now.format(timestampFormatter),
+            page = 0,
+            size = totalRows,
+            rowCount = totalRows,
+            elapsedMs = execution.elapsedMs,
+            truncated = false
+        )
+
+        return ReportRunResponse(
+            name = entity.name,
+            meta = meta,
+            query = execution.query,
+            columns = execution.columns,
+            rows = execution.allRows,
             summaries = summaries
         )
     }
@@ -450,6 +482,78 @@ class ReportService(
             allRows = allRows,
             elapsedMs = elapsedMs
         )
+    }
+
+    private fun executeReportPage(
+        entity: ReportEntity,
+        ctx: UpstreamContext,
+        params: Map<String, Any?>,
+        page: Int,
+        size: Int
+    ): PaginatedExecutionResult {
+        val queryTemplate = entity.sql.trim()
+        require(queryTemplate.isNotBlank()) { "SQL nao pode ser vazia" }
+        ReadOnlySqlValidator.requireReadOnly(queryTemplate)
+        val query = buildQueryWithParams(queryTemplate, entity.variables, params)
+        val paginatedQuery = toPaginatedSelect(query, size, page * size)
+        val countQuery = toCountSelect(query)
+
+        val start = System.nanoTime()
+        val pageResult = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, paginatedQuery, true, true)
+        val totalRows = fetchTotalRows(ctx, countQuery)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+
+        val tabular = EmailReportFormatter.toTabular(pageResult)
+        val columns = tabular?.columns ?: emptyList()
+        val rows = tabular?.rows?.map { row ->
+            columns.zip(row).associate { (column, value) -> column to value }
+        } ?: emptyList()
+
+        return PaginatedExecutionResult(
+            query = paginatedQuery,
+            columns = columns,
+            rows = rows,
+            rowCount = totalRows,
+            elapsedMs = elapsedMs
+        )
+    }
+
+    private fun fetchTotalRows(ctx: UpstreamContext, countQuery: String): Int {
+        val result = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, countQuery, true, true)
+        val tabular = EmailReportFormatter.toTabular(result)
+        val firstValue = tabular?.rows?.firstOrNull()?.firstOrNull()
+            ?: throw IllegalStateException("Resposta de count sem dados")
+
+        return when (firstValue) {
+            is Int -> firstValue
+            is Long -> firstValue.toInt()
+            is Short -> firstValue.toInt()
+            is Byte -> firstValue.toInt()
+            is BigInteger -> firstValue.toInt()
+            is BigDecimal -> firstValue.toInt()
+            is Number -> firstValue.toInt()
+            is String -> firstValue.trim().toIntOrNull()
+                ?: throw IllegalStateException("Valor de count invalido: '$firstValue'")
+            else -> throw IllegalStateException("Tipo de count invalido: ${firstValue::class.java.name}")
+        }
+    }
+
+    private fun toPaginatedSelect(rawQuery: String, limit: Int, offset: Int): String {
+        val query = rawQuery.trim().trimEnd(';').trim()
+        require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+        val startsLikeReadOnly = query.startsWith("select", ignoreCase = true) ||
+            query.startsWith("with", ignoreCase = true)
+        require(startsLikeReadOnly) { "Paginacao disponivel apenas para SELECT/WITH" }
+        return "SELECT * FROM ($query) dbi_paginated LIMIT $limit OFFSET $offset"
+    }
+
+    private fun toCountSelect(rawQuery: String): String {
+        val query = rawQuery.trim().trimEnd(';').trim()
+        require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+        val startsLikeReadOnly = query.startsWith("select", ignoreCase = true) ||
+            query.startsWith("with", ignoreCase = true)
+        require(startsLikeReadOnly) { "Paginacao disponivel apenas para SELECT/WITH" }
+        return "SELECT COUNT(*) AS dbi_total_rows FROM ($query) dbi_counted"
     }
 
     private fun buildQueryWithParams(
@@ -787,6 +891,14 @@ class ReportService(
         val query: String,
         val columns: List<String>,
         val allRows: List<Map<String, Any?>>,
+        val elapsedMs: Long
+    )
+
+    private data class PaginatedExecutionResult(
+        val query: String,
+        val columns: List<String>,
+        val rows: List<Map<String, Any?>>,
+        val rowCount: Int,
         val elapsedMs: Long
     )
 
