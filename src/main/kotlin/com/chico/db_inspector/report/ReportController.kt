@@ -59,6 +59,14 @@ class ReportController(
         ctx: UpstreamContext
     ): ReportRunResponse = reportService.run(id, ctx, body ?: ReportRunRequest())
 
+    @PostMapping("/{id}/run/all")
+    @PreAuthorize("hasAuthority('REPORT_RUN')")
+    fun runAll(
+        @PathVariable id: UUID,
+        @RequestBody(required = false) body: ReportRunRequest?,
+        ctx: UpstreamContext
+    ): ReportRunResponse = reportService.runAll(id, ctx, body ?: ReportRunRequest())
+
     @PostMapping("/{id}/pdf")
     @PreAuthorize("hasAuthority('REPORT_RUN')")
     fun pdf(
