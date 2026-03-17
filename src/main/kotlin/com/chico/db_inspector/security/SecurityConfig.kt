@@ -41,6 +41,8 @@ class SecurityConfig(
                     .requestMatchers(
                     "/api/auth/login",
                     "/api/auth/refresh",
+                    "/api/auth/password-reset/request",
+                    "/api/auth/password-reset/confirm",
                     "/error"
                 ).permitAll()
                     .anyRequest().authenticated()

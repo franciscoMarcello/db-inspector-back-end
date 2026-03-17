@@ -96,6 +96,29 @@ class RolePermissionEntity(
 
 @Entity
 @Table(
+    name = "auth_password_reset_tokens",
+    indexes = [Index(name = "idx_auth_password_reset_tokens_user", columnList = "user_id")]
+)
+class PasswordResetTokenEntity(
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    var id: UUID? = null,
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    var user: AppUserEntity? = null,
+    @Column(name = "token_hash", nullable = false, unique = true, length = 128)
+    var tokenHash: String = "",
+    @Column(name = "expires_at", nullable = false)
+    var expiresAt: Instant = Instant.EPOCH,
+    @Column(nullable = false)
+    var used: Boolean = false,
+    @CreationTimestamp
+    @Column(nullable = false, updatable = false)
+    var createdAt: Instant? = null
+)
+
+@Entity
+@Table(
     name = "auth_refresh_tokens",
     indexes = [Index(name = "idx_auth_refresh_tokens_user", columnList = "user_id")]
 )

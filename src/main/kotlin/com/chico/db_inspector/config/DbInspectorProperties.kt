@@ -13,7 +13,8 @@ data class DbInspectorProperties(
     var security: SecurityProperties = SecurityProperties()
 ) {
     data class MailProperties(
-        var from: String = "no-reply@dbinspector.local"
+        var from: String = "no-reply@dbinspector.local",
+        var passwordResetUrl: String = ""
     )
 
     data class ScheduleProperties(
