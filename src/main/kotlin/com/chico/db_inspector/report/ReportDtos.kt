@@ -17,7 +17,9 @@ data class ReportRequest(
     val folderId: UUID? = null,
     val jasperTemplateId: UUID? = null,
     @field:Valid
-    val variables: List<ReportVariableRequest> = emptyList()
+    val variables: List<ReportVariableRequest> = emptyList(),
+    val secondSql: String? = null,
+    val comparisonKey: String? = null
 )
 
 data class ReportVariableRequest(
@@ -46,7 +48,9 @@ data class ReportResponse(
     val jasperTemplate: JasperTemplateSummaryResponse?,
     val variables: List<ReportVariableResponse>,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val secondSql: String? = null,
+    val comparisonKey: String? = null
 )
 
 data class ReportFolderSummaryResponse(
@@ -165,4 +169,40 @@ data class JasperTemplateResponse(
     val archived: Boolean,
     val createdAt: Long,
     val updatedAt: Long
+)
+
+data class ComparisonSource(
+    val label: String,
+    val columns: List<String>,
+    val rows: List<Map<String, Any?>>,
+    val rowCount: Int
+)
+
+data class FieldComparison(
+    val source1: Any?,
+    val source2: Any?,
+    val equal: Boolean,
+    val diff: Double?
+)
+
+data class MatchedRecord(
+    val key: String?,
+    val fields: Map<String, FieldComparison>
+)
+
+data class ComparisonDiff(
+    val onlyInSource1: List<Map<String, Any?>>,
+    val onlyInSource2: List<Map<String, Any?>>,
+    val matchCount: Int,
+    val equalCount: Int,
+    val differentCount: Int,
+    val withDifferences: List<MatchedRecord>
+)
+
+data class ComparisonResponse(
+    val name: String,
+    val comparisonKey: String?,
+    val source1: ComparisonSource,
+    val source2: ComparisonSource,
+    val diff: ComparisonDiff?
 )

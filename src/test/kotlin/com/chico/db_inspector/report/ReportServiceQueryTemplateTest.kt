@@ -1,6 +1,7 @@
 package com.chico.dbinspector.report
 
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -236,6 +237,7 @@ class ReportServiceQueryTemplateTest {
             jasperTemplateRepository = jasperTemplateRepository,
             accessControl = accessControl,
             sqlExecClient = sqlExecClient,
+            hanaQueryService = HanaQueryService(null),
             properties = DbInspectorProperties()
         )
     }

@@ -82,6 +82,14 @@ class ReportController(
             .body(pdfBytes)
     }
 
+    @PostMapping("/{id}/compare")
+    @PreAuthorize("hasAuthority('REPORT_RUN')")
+    fun compare(
+        @PathVariable id: UUID,
+        @RequestBody(required = false) body: ReportRunRequest?,
+        ctx: UpstreamContext
+    ): ComparisonResponse = reportService.compare(id, ctx, body ?: ReportRunRequest())
+
     @PostMapping("/{id}/variables/{key}/options")
     @PreAuthorize("hasAuthority('REPORT_RUN')")
     fun variableOptions(

@@ -29,6 +29,10 @@ class ReportEntity(
     var sql: String = "",
     @Column(columnDefinition = "TEXT")
     var description: String? = null,
+    @Column(columnDefinition = "TEXT")
+    var secondSql: String? = null,
+    @Column
+    var comparisonKey: String? = null,
     @Column(nullable = false)
     var archived: Boolean = false,
     @ManyToOne(fetch = FetchType.LAZY)
