@@ -209,48 +209,21 @@ class ReportService(
             rowCount = hanaResult.rows.size
         )
 
-        val diff = entity.comparisonKey?.trim().takeIf { !it.isNullOrBlank() }?.let { key ->
-            val rows1ByKey = source1.rows.groupBy { it[key]?.toString() }
-            val rows2ByKey = source2.rows.groupBy { it[key]?.toString() }
-            val allKeys = (rows1ByKey.keys + rows2ByKey.keys).distinct()
-            val onlyInSource1 = mutableListOf<Map<String, Any?>>()
-            val onlyInSource2 = mutableListOf<Map<String, Any?>>()
-            val withDifferences = mutableListOf<MatchedRecord>()
-            var matchCount = 0
-            var equalCount = 0
-            var differentCount = 0
-            val commonColumns = (execution1.columns.toSet() intersect hanaResult.columns.toSet()) - key
-            allKeys.forEach { k ->
-                val list1 = rows1ByKey[k] ?: emptyList()
-                val list2 = rows2ByKey[k] ?: emptyList()
-                val count1 = list1.size
-                val count2 = list2.size
-                val matched = minOf(count1, count2)
-                matchCount += matched
-                for (i in 0 until matched) {
-                    val row1 = list1[i]
-                    val row2 = list2[i]
-                    val fields = commonColumns.associateWith { col ->
-                        compareFieldValue(row1[col], row2[col])
-                    }
-                    if (fields.values.all { it.equal }) {
-                        equalCount++
-                    } else {
-                        differentCount++
-                        withDifferences += MatchedRecord(key = k, fields = fields)
-                    }
-                }
-                if (count1 > count2) onlyInSource1 += list1.drop(matched)
-                if (count2 > count1) onlyInSource2 += list2.drop(matched)
+        val comparisonKey = entity.comparisonKey?.trim().takeIf { !it.isNullOrBlank() }
+        if (comparisonKey != null) {
+            if (!source1.columns.contains(comparisonKey)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Campo de comparacao '$comparisonKey' ausente na origem Sistema")
             }
-            ComparisonDiff(
-                onlyInSource1 = onlyInSource1,
-                onlyInSource2 = onlyInSource2,
-                matchCount = matchCount,
-                equalCount = equalCount,
-                differentCount = differentCount,
-                withDifferences = withDifferences
-            )
+            if (!source2.columns.contains(comparisonKey)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Campo de comparacao '$comparisonKey' ausente na origem SAP HANA")
+            }
+        }
+
+        val commonColumns = (execution1.columns.toSet() intersect hanaResult.columns.toSet()) - setOfNotNull(comparisonKey)
+        val diff = if (comparisonKey != null) {
+            buildKeyedComparisonDiff(source1, source2, comparisonKey, commonColumns)
+        } else {
+            buildContentComparisonDiff(source1, source2, commonColumns)
         }
 
         return ComparisonResponse(
@@ -1014,6 +987,118 @@ class ReportService(
                 orderIndex = variable.orderIndex ?: index
             )
         }
+    }
+
+    private fun buildKeyedComparisonDiff(
+        source1: ComparisonSource,
+        source2: ComparisonSource,
+        comparisonKey: String,
+        commonColumns: Set<String>
+    ): ComparisonDiff {
+        val rows1ByKey = source1.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
+        val rows2ByKey = source2.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
+        val duplicateKeysSource1 = rows1ByKey
+            .filter { it.value.size > 1 }
+            .mapKeys { it.key ?: "<null>" }
+            .mapValues { it.value.size }
+        val duplicateKeysSource2 = rows2ByKey
+            .filter { it.value.size > 1 }
+            .mapKeys { it.key ?: "<null>" }
+            .mapValues { it.value.size }
+        val allKeys = (rows1ByKey.keys + rows2ByKey.keys).distinct().sortedWith(compareBy(nullsFirst<String>()) { it })
+
+        val onlyInSource1 = mutableListOf<Map<String, Any?>>()
+        val onlyInSource2 = mutableListOf<Map<String, Any?>>()
+        val withDifferences = mutableListOf<MatchedRecord>()
+        var matchCount = 0
+        var equalCount = 0
+        var differentCount = 0
+
+        allKeys.forEach { keyValue ->
+            val list1 = (rows1ByKey[keyValue] ?: emptyList()).sortedBy { rowFingerprint(it, commonColumns) }
+            val list2 = (rows2ByKey[keyValue] ?: emptyList()).sortedBy { rowFingerprint(it, commonColumns) }
+            val matched = minOf(list1.size, list2.size)
+            matchCount += matched
+
+            for (i in 0 until matched) {
+                val row1 = list1[i]
+                val row2 = list2[i]
+                val fields = commonColumns.associateWith { col ->
+                    compareFieldValue(row1[col], row2[col])
+                }
+                if (fields.values.all { it.equal }) {
+                    equalCount++
+                } else {
+                    differentCount++
+                    withDifferences += MatchedRecord(key = keyValue, fields = fields)
+                }
+            }
+
+            if (list1.size > matched) onlyInSource1 += list1.drop(matched)
+            if (list2.size > matched) onlyInSource2 += list2.drop(matched)
+        }
+
+        return ComparisonDiff(
+            onlyInSource1 = onlyInSource1,
+            onlyInSource2 = onlyInSource2,
+            matchCount = matchCount,
+            equalCount = equalCount,
+            differentCount = differentCount,
+            withDifferences = withDifferences,
+            duplicateKeysSource1 = duplicateKeysSource1,
+            duplicateKeysSource2 = duplicateKeysSource2,
+            mode = "keyed"
+        )
+    }
+
+    private fun buildContentComparisonDiff(
+        source1: ComparisonSource,
+        source2: ComparisonSource,
+        commonColumns: Set<String>
+    ): ComparisonDiff {
+        val rows1ByContent = source1.rows.groupBy { rowFingerprint(it, commonColumns) }
+        val rows2ByContent = source2.rows.groupBy { rowFingerprint(it, commonColumns) }
+        val allFingerprints = (rows1ByContent.keys + rows2ByContent.keys).distinct()
+
+        val onlyInSource1 = mutableListOf<Map<String, Any?>>()
+        val onlyInSource2 = mutableListOf<Map<String, Any?>>()
+        var matchCount = 0
+
+        allFingerprints.forEach { fp ->
+            val list1 = rows1ByContent[fp] ?: emptyList()
+            val list2 = rows2ByContent[fp] ?: emptyList()
+            val matched = minOf(list1.size, list2.size)
+            matchCount += matched
+            if (list1.size > matched) onlyInSource1 += list1.drop(matched)
+            if (list2.size > matched) onlyInSource2 += list2.drop(matched)
+        }
+
+        return ComparisonDiff(
+            onlyInSource1 = onlyInSource1,
+            onlyInSource2 = onlyInSource2,
+            matchCount = matchCount,
+            equalCount = matchCount,
+            differentCount = 0,
+            withDifferences = emptyList(),
+            mode = "content"
+        )
+    }
+
+    private fun normalizeComparisonKeyValue(value: Any?): String? {
+        val normalized = value?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        return normalized?.lowercase()
+    }
+
+    private fun rowFingerprint(row: Map<String, Any?>, columns: Set<String>): String =
+        columns.sorted().joinToString("|") { col ->
+            "$col=${normalizeFingerprintValue(row[col])}"
+        }
+
+    private fun normalizeFingerprintValue(value: Any?): String {
+        if (value == null) return "__NULL__"
+        val bd = runCatching { toBigDecimal(value) }.getOrNull()
+        if (bd != null) return bd.stripTrailingZeros().toPlainString()
+        return value.toString().trim().lowercase()
     }
 
     private fun compareFieldValue(v1: Any?, v2: Any?): FieldComparison {

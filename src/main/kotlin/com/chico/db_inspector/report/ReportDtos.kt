@@ -196,8 +196,30 @@ data class ComparisonDiff(
     val matchCount: Int,
     val equalCount: Int,
     val differentCount: Int,
-    val withDifferences: List<MatchedRecord>
-)
+    val withDifferences: List<MatchedRecord>,
+    val duplicateKeysSource1: Map<String, Int> = emptyMap(),
+    val duplicateKeysSource2: Map<String, Int> = emptyMap(),
+    val mode: String = "keyed"
+) {
+    constructor(
+        onlyInSource1: List<Map<String, Any?>>,
+        onlyInSource2: List<Map<String, Any?>>,
+        matchCount: Int,
+        equalCount: Int,
+        differentCount: Int,
+        withDifferences: List<MatchedRecord>
+    ) : this(
+        onlyInSource1 = onlyInSource1,
+        onlyInSource2 = onlyInSource2,
+        matchCount = matchCount,
+        equalCount = equalCount,
+        differentCount = differentCount,
+        withDifferences = withDifferences,
+        duplicateKeysSource1 = emptyMap(),
+        duplicateKeysSource2 = emptyMap(),
+        mode = "keyed"
+    )
+}
 
 data class ComparisonResponse(
     val name: String,
