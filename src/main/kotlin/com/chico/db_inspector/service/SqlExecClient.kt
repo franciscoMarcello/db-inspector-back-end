@@ -20,18 +20,22 @@ class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebCli
         endpointUrl: String,
         bearer: String,
         query: String,
+        params: Map<String, Any?> = emptyMap(),
         asDict: Boolean = true,
         withDescription: Boolean = true
     ): Map<String, Any?> {
 
-        val payload = mapOf(
+        val payload = mutableMapOf<String, Any?>(
             "query" to query,
             "asDict" to asDict,
             "withDescription" to withDescription
         )
+        if (params.isNotEmpty()) {
+            payload["params"] = params
+        }
 
         val entity: ResponseEntity<String> = webClient.post()
-            .uri(endpointUrl) // URL absoluta vinda do header
+            .uri(endpointUrl)
             .contentType(MediaType.APPLICATION_JSON)
             .accept(MediaType.APPLICATION_JSON)
             .headers { h -> h.set(HttpHeaders.AUTHORIZATION, bearer) }
@@ -85,4 +89,20 @@ class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebCli
 
         return mapper.readValue(text)
     }
+
+    fun exec(
+        endpointUrl: String,
+        bearer: String,
+        query: String,
+        asDict: Boolean,
+        withDescription: Boolean
+    ): Map<String, Any?> = exec(
+        endpointUrl = endpointUrl,
+        bearer = bearer,
+        query = query,
+        params = emptyMap(),
+        asDict = asDict,
+        withDescription = withDescription
+    )
+
 }

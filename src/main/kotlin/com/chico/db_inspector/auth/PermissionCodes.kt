@@ -19,6 +19,9 @@ object PermissionCodes {
     const val EMAIL_SCHEDULE_READ = "EMAIL_SCHEDULE_READ"
     const val EMAIL_SCHEDULE_WRITE = "EMAIL_SCHEDULE_WRITE"
 
+    const val DASHBOARD_VIEW = "DASHBOARD_VIEW"
+    const val DASHBOARD_WRITE = "DASHBOARD_WRITE"
+
     val catalog = listOf(
         PermissionView(REPORT_READ, "Visualizar Relatorios", "Permite listar e visualizar relatorios"),
         PermissionView(REPORT_WRITE, "Gerenciar Relatorios", "Permite criar, editar e excluir relatorios"),
@@ -32,7 +35,9 @@ object PermissionCodes {
         PermissionView(EMAIL_SEND, "Enviar Email", "Permite envio imediato de relatorios por email"),
         PermissionView(EMAIL_TEST, "Enviar Email de Teste", "Permite envio de email de teste"),
         PermissionView(EMAIL_SCHEDULE_READ, "Visualizar Agendamentos", "Permite listar e consultar agendamentos"),
-        PermissionView(EMAIL_SCHEDULE_WRITE, "Gerenciar Agendamentos", "Permite criar, editar, pausar e remover agendamentos")
+        PermissionView(EMAIL_SCHEDULE_WRITE, "Gerenciar Agendamentos", "Permite criar, editar, pausar e remover agendamentos"),
+        PermissionView(DASHBOARD_VIEW, "Visualizar Dashboards", "Permite listar dashboards e executar widgets"),
+        PermissionView(DASHBOARD_WRITE, "Gerenciar Dashboards", "Permite criar, editar e arquivar dashboards e widgets")
     )
 
     val all = catalog.map { it.code }
