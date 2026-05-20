@@ -60,3 +60,8 @@ interface RefreshTokenRepository : JpaRepository<RefreshTokenEntity, UUID> {
     fun findByTokenHashAndRevokedFalse(tokenHash: String): Optional<RefreshTokenEntity>
     fun findAllByUserIdAndRevokedFalse(userId: UUID): List<RefreshTokenEntity>
 }
+
+interface PasswordResetTokenRepository : JpaRepository<PasswordResetTokenEntity, UUID> {
+    fun findByTokenHashAndUsedFalse(tokenHash: String): Optional<PasswordResetTokenEntity>
+    fun findAllByUserIdAndUsedFalse(userId: UUID): List<PasswordResetTokenEntity>
+}

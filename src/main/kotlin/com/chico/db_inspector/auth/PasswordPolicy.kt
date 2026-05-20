@@ -15,7 +15,7 @@ object PasswordPolicy {
     fun validateOrThrow(rawPassword: String) {
         val password = rawPassword.trim()
         if (!isValid(password)) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, validationMessage())
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, validationMessage())
         }
     }
 

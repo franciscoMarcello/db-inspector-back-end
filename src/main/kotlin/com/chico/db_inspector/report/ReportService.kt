@@ -2,6 +2,7 @@ package com.chico.dbinspector.report
 
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.email.EmailReportFormatter
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
@@ -41,6 +42,7 @@ class ReportService(
     private val jasperTemplateRepository: ReportJasperTemplateRepository,
     private val accessControl: ReportAccessControlService,
     private val sqlExecClient: SqlExecClient,
+    private val hanaQueryService: HanaQueryService,
     private val properties: DbInspectorProperties,
     private val clock: Clock = Clock.systemDefaultZone()
 ) {
@@ -69,6 +71,8 @@ class ReportService(
 
     fun create(request: ReportRequest): ReportResponse {
         request.folderId?.let { accessControl.requireFolderAccess(it, AccessAction.EDIT) }
+        val secondSql = request.secondSql?.trim().takeUnless { it.isNullOrBlank() }
+        secondSql?.let { ReadOnlySqlValidator.requireReadOnly(it) }
         val entity = ReportEntity(
             name = request.name.trim(),
             templateName = request.templateName.trim(),
@@ -76,7 +80,9 @@ class ReportService(
             description = request.description?.trim().takeUnless { it.isNullOrBlank() },
             archived = request.archived ?: false,
             folder = resolveFolder(request.folderId),
-            jasperTemplate = resolveJasperTemplate(request.jasperTemplateId)
+            jasperTemplate = resolveJasperTemplate(request.jasperTemplateId),
+            secondSql = secondSql,
+            comparisonKey = request.comparisonKey?.trim().takeUnless { it.isNullOrBlank() }
         )
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
         ReadOnlySqlValidator.requireReadOnly(entity.sql)
@@ -90,10 +96,14 @@ class ReportService(
         }
         accessControl.requireReportAccess(entity, AccessAction.EDIT)
         request.folderId?.let { accessControl.requireFolderAccess(it, AccessAction.EDIT) }
+        val secondSql = request.secondSql?.trim().takeUnless { it.isNullOrBlank() }
+        secondSql?.let { ReadOnlySqlValidator.requireReadOnly(it) }
         entity.name = request.name.trim()
         entity.templateName = request.templateName.trim()
         entity.sql = request.sql.trim()
         entity.description = request.description?.trim().takeUnless { it.isNullOrBlank() }
+        entity.secondSql = secondSql
+        entity.comparisonKey = request.comparisonKey?.trim().takeUnless { it.isNullOrBlank() }
         request.archived?.let { entity.archived = it }
         entity.folder = resolveFolder(request.folderId)
         entity.jasperTemplate = resolveJasperTemplate(request.jasperTemplateId)
@@ -171,6 +181,57 @@ class ReportService(
             columns = execution.columns,
             rows = execution.allRows,
             summaries = summaries
+        )
+    }
+
+    fun compare(id: UUID, ctx: UpstreamContext, request: ReportRunRequest): ComparisonResponse {
+        val entity = repository.findById(id).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        val secondSql = entity.secondSql?.trim().takeIf { !it.isNullOrBlank() }
+            ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Relatorio sem SQL de comparacao configurado")
+
+        val execution1 = executeReport(entity, ctx, request.params)
+        val source1 = ComparisonSource(
+            label = "Sistema",
+            columns = execution1.columns,
+            rows = execution1.allRows,
+            rowCount = execution1.allRows.size
+        )
+
+        val interpolatedSecondSql = buildQueryWithParams(secondSql, entity.variables, request.params)
+        val hanaResult = hanaQueryService.exec(interpolatedSecondSql)
+        val source2 = ComparisonSource(
+            label = "SAP HANA",
+            columns = hanaResult.columns,
+            rows = hanaResult.rows,
+            rowCount = hanaResult.rows.size
+        )
+
+        val comparisonKey = entity.comparisonKey?.trim().takeIf { !it.isNullOrBlank() }
+        if (comparisonKey != null) {
+            if (!source1.columns.contains(comparisonKey)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Campo de comparacao '$comparisonKey' ausente na origem Sistema")
+            }
+            if (!source2.columns.contains(comparisonKey)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Campo de comparacao '$comparisonKey' ausente na origem SAP HANA")
+            }
+        }
+
+        val commonColumns = (execution1.columns.toSet() intersect hanaResult.columns.toSet()) - setOfNotNull(comparisonKey)
+        val diff = if (comparisonKey != null) {
+            buildKeyedComparisonDiff(source1, source2, comparisonKey, commonColumns)
+        } else {
+            buildContentComparisonDiff(source1, source2, commonColumns)
+        }
+
+        return ComparisonResponse(
+            name = entity.name,
+            comparisonKey = entity.comparisonKey,
+            source1 = source1,
+            source2 = source2,
+            diff = diff
         )
     }
 
@@ -438,7 +499,9 @@ class ReportService(
                     )
                 },
             createdAt = created.toEpochMilli(),
-            updatedAt = updated.toEpochMilli()
+            updatedAt = updated.toEpochMilli(),
+            secondSql = secondSql,
+            comparisonKey = comparisonKey
         )
     }
 
@@ -924,6 +987,139 @@ class ReportService(
                 orderIndex = variable.orderIndex ?: index
             )
         }
+    }
+
+    private fun buildKeyedComparisonDiff(
+        source1: ComparisonSource,
+        source2: ComparisonSource,
+        comparisonKey: String,
+        commonColumns: Set<String>
+    ): ComparisonDiff {
+        val rows1ByKey = source1.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
+        val rows2ByKey = source2.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
+        val duplicateKeysSource1 = rows1ByKey
+            .filter { it.value.size > 1 }
+            .mapKeys { it.key ?: "<null>" }
+            .mapValues { it.value.size }
+        val duplicateKeysSource2 = rows2ByKey
+            .filter { it.value.size > 1 }
+            .mapKeys { it.key ?: "<null>" }
+            .mapValues { it.value.size }
+        val allKeys = (rows1ByKey.keys + rows2ByKey.keys).distinct().sortedWith(compareBy(nullsFirst<String>()) { it })
+
+        val onlyInSource1 = mutableListOf<Map<String, Any?>>()
+        val onlyInSource2 = mutableListOf<Map<String, Any?>>()
+        val withDifferences = mutableListOf<MatchedRecord>()
+        var matchCount = 0
+        var equalCount = 0
+        var differentCount = 0
+
+        allKeys.forEach { keyValue ->
+            val list1 = (rows1ByKey[keyValue] ?: emptyList()).sortedBy { rowFingerprint(it, commonColumns) }
+            val list2 = (rows2ByKey[keyValue] ?: emptyList()).sortedBy { rowFingerprint(it, commonColumns) }
+            val matched = minOf(list1.size, list2.size)
+            matchCount += matched
+
+            for (i in 0 until matched) {
+                val row1 = list1[i]
+                val row2 = list2[i]
+                val fields = commonColumns.associateWith { col ->
+                    compareFieldValue(row1[col], row2[col])
+                }
+                if (fields.values.all { it.equal }) {
+                    equalCount++
+                } else {
+                    differentCount++
+                    withDifferences += MatchedRecord(key = keyValue, fields = fields)
+                }
+            }
+
+            if (list1.size > matched) onlyInSource1 += list1.drop(matched)
+            if (list2.size > matched) onlyInSource2 += list2.drop(matched)
+        }
+
+        return ComparisonDiff(
+            onlyInSource1 = onlyInSource1,
+            onlyInSource2 = onlyInSource2,
+            matchCount = matchCount,
+            equalCount = equalCount,
+            differentCount = differentCount,
+            withDifferences = withDifferences,
+            duplicateKeysSource1 = duplicateKeysSource1,
+            duplicateKeysSource2 = duplicateKeysSource2,
+            mode = "keyed"
+        )
+    }
+
+    private fun buildContentComparisonDiff(
+        source1: ComparisonSource,
+        source2: ComparisonSource,
+        commonColumns: Set<String>
+    ): ComparisonDiff {
+        val rows1ByContent = source1.rows.groupBy { rowFingerprint(it, commonColumns) }
+        val rows2ByContent = source2.rows.groupBy { rowFingerprint(it, commonColumns) }
+        val allFingerprints = (rows1ByContent.keys + rows2ByContent.keys).distinct()
+
+        val onlyInSource1 = mutableListOf<Map<String, Any?>>()
+        val onlyInSource2 = mutableListOf<Map<String, Any?>>()
+        var matchCount = 0
+
+        allFingerprints.forEach { fp ->
+            val list1 = rows1ByContent[fp] ?: emptyList()
+            val list2 = rows2ByContent[fp] ?: emptyList()
+            val matched = minOf(list1.size, list2.size)
+            matchCount += matched
+            if (list1.size > matched) onlyInSource1 += list1.drop(matched)
+            if (list2.size > matched) onlyInSource2 += list2.drop(matched)
+        }
+
+        return ComparisonDiff(
+            onlyInSource1 = onlyInSource1,
+            onlyInSource2 = onlyInSource2,
+            matchCount = matchCount,
+            equalCount = matchCount,
+            differentCount = 0,
+            withDifferences = emptyList(),
+            mode = "content"
+        )
+    }
+
+    private fun normalizeComparisonKeyValue(value: Any?): String? {
+        val normalized = value?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        return normalized?.lowercase()
+    }
+
+    private fun rowFingerprint(row: Map<String, Any?>, columns: Set<String>): String =
+        columns.sorted().joinToString("|") { col ->
+            "$col=${normalizeFingerprintValue(row[col])}"
+        }
+
+    private fun normalizeFingerprintValue(value: Any?): String {
+        if (value == null) return "__NULL__"
+        val bd = runCatching { toBigDecimal(value) }.getOrNull()
+        if (bd != null) return bd.stripTrailingZeros().toPlainString()
+        return value.toString().trim().lowercase()
+    }
+
+    private fun compareFieldValue(v1: Any?, v2: Any?): FieldComparison {
+        if (v1 == null && v2 == null) return FieldComparison(source1 = null, source2 = null, equal = true, diff = null)
+        if (v1 == null || v2 == null) return FieldComparison(source1 = v1, source2 = v2, equal = false, diff = null)
+
+        val bd1 = runCatching { toBigDecimal(v1) }.getOrNull()
+        val bd2 = runCatching { toBigDecimal(v2) }.getOrNull()
+
+        if (bd1 != null && bd2 != null) {
+            val equal = bd1.compareTo(bd2) == 0
+            val diff = if (equal) null else (bd1 - bd2).toDouble()
+            return FieldComparison(source1 = v1, source2 = v2, equal = equal, diff = diff)
+        }
+
+        if (bd1 != null || bd2 != null) {
+            return FieldComparison(source1 = v1, source2 = v2, equal = false, diff = null)
+        }
+
+        val equal = v1.toString().trim() == v2.toString().trim()
+        return FieldComparison(source1 = v1, source2 = v2, equal = equal, diff = null)
     }
 
     private data class OptionColumns(
