@@ -220,10 +220,11 @@ class ReportService(
         }
 
         val commonColumns = (execution1.columns.toSet() intersect hanaResult.columns.toSet()) - setOfNotNull(comparisonKey)
+        val toleranceByField = normalizeComparisonTolerances(request.comparisonTolerances)
         val diff = if (comparisonKey != null) {
-            buildKeyedComparisonDiff(source1, source2, comparisonKey, commonColumns)
+            buildKeyedComparisonDiff(source1, source2, comparisonKey, commonColumns, toleranceByField)
         } else {
-            buildContentComparisonDiff(source1, source2, commonColumns)
+            buildContentComparisonDiff(source1, source2, commonColumns, toleranceByField)
         }
 
         return ComparisonResponse(
@@ -399,6 +400,24 @@ class ReportService(
         }
 
         return ReportValidationResponse(valid = errors.isEmpty(), errors = errors, renderedQuery = renderedQuery)
+    }
+
+    fun connectionTest(request: ReportConnectionTestRequest): ReportConnectionTestResponse {
+        val source = request.source.trim().lowercase()
+        val query = request.sql.trim()
+        require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+
+        return when (source) {
+            "sap" -> {
+                val result = hanaQueryService.exec(query)
+                ReportConnectionTestResponse(
+                    source = source,
+                    columns = result.columns,
+                    rows = result.rows
+                )
+            }
+            else -> throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Fonte nao suportada: $source")
+        }
     }
 
     fun listVariableOptions(
@@ -993,7 +1012,8 @@ class ReportService(
         source1: ComparisonSource,
         source2: ComparisonSource,
         comparisonKey: String,
-        commonColumns: Set<String>
+        commonColumns: Set<String>,
+        toleranceByField: Map<String, BigDecimal>
     ): ComparisonDiff {
         val rows1ByKey = source1.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
         val rows2ByKey = source2.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
@@ -1024,7 +1044,7 @@ class ReportService(
                 val row1 = list1[i]
                 val row2 = list2[i]
                 val fields = commonColumns.associateWith { col ->
-                    compareFieldValue(row1[col], row2[col])
+                    compareFieldValue(row1[col], row2[col], toleranceByField[col.lowercase()])
                 }
                 if (fields.values.all { it.equal }) {
                     equalCount++
@@ -1054,28 +1074,55 @@ class ReportService(
     private fun buildContentComparisonDiff(
         source1: ComparisonSource,
         source2: ComparisonSource,
-        commonColumns: Set<String>
+        commonColumns: Set<String>,
+        toleranceByField: Map<String, BigDecimal>
     ): ComparisonDiff {
-        val rows1ByContent = source1.rows.groupBy { rowFingerprint(it, commonColumns) }
-        val rows2ByContent = source2.rows.groupBy { rowFingerprint(it, commonColumns) }
-        val allFingerprints = (rows1ByContent.keys + rows2ByContent.keys).distinct()
+        if (toleranceByField.isEmpty()) {
+            val rows1ByContent = source1.rows.groupBy { rowFingerprint(it, commonColumns) }
+            val rows2ByContent = source2.rows.groupBy { rowFingerprint(it, commonColumns) }
+            val allFingerprints = (rows1ByContent.keys + rows2ByContent.keys).distinct()
 
+            val onlyInSource1 = mutableListOf<Map<String, Any?>>()
+            val onlyInSource2 = mutableListOf<Map<String, Any?>>()
+            var matchCount = 0
+
+            allFingerprints.forEach { fp ->
+                val list1 = rows1ByContent[fp] ?: emptyList()
+                val list2 = rows2ByContent[fp] ?: emptyList()
+                val matched = minOf(list1.size, list2.size)
+                matchCount += matched
+                if (list1.size > matched) onlyInSource1 += list1.drop(matched)
+                if (list2.size > matched) onlyInSource2 += list2.drop(matched)
+            }
+
+            return ComparisonDiff(
+                onlyInSource1 = onlyInSource1,
+                onlyInSource2 = onlyInSource2,
+                matchCount = matchCount,
+                equalCount = matchCount,
+                differentCount = 0,
+                withDifferences = emptyList(),
+                mode = "content"
+            )
+        }
+
+        val remainingSource2 = source2.rows.toMutableList()
         val onlyInSource1 = mutableListOf<Map<String, Any?>>()
-        val onlyInSource2 = mutableListOf<Map<String, Any?>>()
         var matchCount = 0
 
-        allFingerprints.forEach { fp ->
-            val list1 = rows1ByContent[fp] ?: emptyList()
-            val list2 = rows2ByContent[fp] ?: emptyList()
-            val matched = minOf(list1.size, list2.size)
-            matchCount += matched
-            if (list1.size > matched) onlyInSource1 += list1.drop(matched)
-            if (list2.size > matched) onlyInSource2 += list2.drop(matched)
+        source1.rows.forEach { row1 ->
+            val idx = remainingSource2.indexOfFirst { row2 -> rowsEqualWithTolerance(row1, row2, commonColumns, toleranceByField) }
+            if (idx >= 0) {
+                matchCount++
+                remainingSource2.removeAt(idx)
+            } else {
+                onlyInSource1 += row1
+            }
         }
 
         return ComparisonDiff(
             onlyInSource1 = onlyInSource1,
-            onlyInSource2 = onlyInSource2,
+            onlyInSource2 = remainingSource2,
             matchCount = matchCount,
             equalCount = matchCount,
             differentCount = 0,
@@ -1101,7 +1148,7 @@ class ReportService(
         return value.toString().trim().lowercase()
     }
 
-    private fun compareFieldValue(v1: Any?, v2: Any?): FieldComparison {
+    private fun compareFieldValue(v1: Any?, v2: Any?, tolerance: BigDecimal? = null): FieldComparison {
         if (v1 == null && v2 == null) return FieldComparison(source1 = null, source2 = null, equal = true, diff = null)
         if (v1 == null || v2 == null) return FieldComparison(source1 = v1, source2 = v2, equal = false, diff = null)
 
@@ -1109,7 +1156,8 @@ class ReportService(
         val bd2 = runCatching { toBigDecimal(v2) }.getOrNull()
 
         if (bd1 != null && bd2 != null) {
-            val equal = bd1.compareTo(bd2) == 0
+            val delta = (bd1 - bd2).abs()
+            val equal = tolerance?.let { delta <= it } ?: (bd1.compareTo(bd2) == 0)
             val diff = if (equal) null else (bd1 - bd2).toDouble()
             return FieldComparison(source1 = v1, source2 = v2, equal = equal, diff = diff)
         }
@@ -1121,6 +1169,27 @@ class ReportService(
         val equal = v1.toString().trim() == v2.toString().trim()
         return FieldComparison(source1 = v1, source2 = v2, equal = equal, diff = null)
     }
+
+
+    private fun normalizeComparisonTolerances(raw: Map<String, Double>): Map<String, BigDecimal> =
+        raw.entries.associate { (field, tolerance) ->
+            val key = field.trim().lowercase()
+            require(key.isNotBlank()) { "Nome de campo de tolerancia nao pode ser vazio" }
+            require(!tolerance.isNaN() && !tolerance.isInfinite() && tolerance >= 0.0) {
+                "Tolerancia invalida para '$field': $tolerance"
+            }
+            key to BigDecimal.valueOf(tolerance)
+        }
+
+    private fun rowsEqualWithTolerance(
+        row1: Map<String, Any?>,
+        row2: Map<String, Any?>,
+        commonColumns: Set<String>,
+        toleranceByField: Map<String, BigDecimal>
+    ): Boolean =
+        commonColumns.all { col ->
+            compareFieldValue(row1[col], row2[col], toleranceByField[col.lowercase()]).equal
+        }
 
     private data class OptionColumns(
         val valor: String,

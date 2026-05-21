@@ -37,6 +37,12 @@ class ReportController(
         ctx: UpstreamContext
     ): ReportValidationResponse = reportService.validate(body, ctx)
 
+    @PostMapping("/connection-test")
+    @PreAuthorize("hasAuthority('REPORT_WRITE')")
+    fun connectionTest(
+        @Valid @RequestBody body: ReportConnectionTestRequest
+    ): ReportConnectionTestResponse = reportService.connectionTest(body)
+
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('REPORT_WRITE')")
     fun update(

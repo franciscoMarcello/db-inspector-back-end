@@ -107,7 +107,8 @@ data class ReportRunRequest(
     val params: Map<String, Any?> = emptyMap(),
     val safe: Boolean = false,
     val page: Int? = 0,
-    val size: Int? = 200
+    val size: Int? = 200,
+    val comparisonTolerances: Map<String, Double> = emptyMap()
 )
 
 data class ReportValidationRequest(
@@ -125,6 +126,20 @@ data class ReportValidationResponse(
     val valid: Boolean,
     val errors: List<String>,
     val renderedQuery: String?
+)
+
+data class ReportConnectionTestRequest(
+    @field:NotBlank
+    @field:Pattern(regexp = "^sap$", flags = [Pattern.Flag.CASE_INSENSITIVE])
+    val source: String,
+    @field:NotBlank
+    val sql: String
+)
+
+data class ReportConnectionTestResponse(
+    val source: String,
+    val columns: List<String>,
+    val rows: List<Map<String, Any?>>
 )
 
 data class ReportRunResponse(
