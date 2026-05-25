@@ -38,7 +38,7 @@ class ReportController(
     ): ReportValidationResponse = reportService.validate(body, ctx)
 
     @PostMapping("/connection-test")
-    @PreAuthorize("hasAuthority('REPORT_WRITE')")
+    @PreAuthorize("hasAuthority('SQL_QUERY_EXECUTE')")
     fun connectionTest(
         @Valid @RequestBody body: ReportConnectionTestRequest
     ): ReportConnectionTestResponse = reportService.connectionTest(body)
