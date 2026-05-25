@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.springframework.http.HttpStatus
+import org.springframework.web.server.ResponseStatusException
 import org.springframework.web.reactive.function.client.ClientResponse
 import org.springframework.web.reactive.function.client.ExchangeFunction
 import org.springframework.web.reactive.function.client.WebClient
@@ -220,7 +221,67 @@ class ReportServiceQueryTemplateTest {
         )
     }
 
-    private fun createService(): ReportService {
+    @Test
+    fun `connectionTest should execute using SAP source`() {
+        val hanaQueryService = Mockito.mock(HanaQueryService::class.java)
+        Mockito.`when`(hanaQueryService.exec("SELECT 1 AS \"ok\" FROM DUMMY")).thenReturn(
+            HanaQueryService.QueryResult(
+                columns = listOf("ok"),
+                rows = listOf(mapOf("ok" to 1))
+            )
+        )
+
+        val service = createService(hanaQueryService)
+        val response = service.connectionTest(
+            ReportConnectionTestRequest(
+                source = "sap",
+                sql = "SELECT 1 AS \"ok\" FROM DUMMY"
+            )
+        )
+
+        assertEquals("sap", response.source)
+        assertEquals(listOf("ok"), response.columns)
+        assertEquals(listOf(mapOf("ok" to 1)), response.rows)
+        Mockito.verify(hanaQueryService).exec("SELECT 1 AS \"ok\" FROM DUMMY")
+    }
+
+    @Test
+    fun `connectionTest should reject unsupported source`() {
+        val service = createService()
+
+        val ex = assertThrows(ResponseStatusException::class.java) {
+            service.connectionTest(
+                ReportConnectionTestRequest(
+                    source = "postgres",
+                    sql = "SELECT 1"
+                )
+            )
+        }
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
+    }
+
+
+
+    @Test
+    fun `compareFieldValue should treat numeric scale as equal`() {
+        val service = createService()
+        val comparison = invokeCompareFieldValue(service, "2500", "2500.00", null)
+        assertTrue(comparison.equal)
+    }
+
+    @Test
+    fun `compareFieldValue should honor tolerance`() {
+        val service = createService()
+
+        val within = invokeCompareFieldValue(service, "2500.004", "2500.00", 0.01)
+        assertTrue(within.equal)
+
+        val outside = invokeCompareFieldValue(service, "2500.02", "2500.00", 0.01)
+        assertFalse(outside.equal)
+    }
+
+    private fun createService(hanaQueryService: HanaQueryService = HanaQueryService(null)): ReportService {
         val reportRepository = Mockito.mock(ReportRepository::class.java)
         val folderRepository = Mockito.mock(ReportFolderRepository::class.java)
         val jasperTemplateRepository = Mockito.mock(ReportJasperTemplateRepository::class.java)
@@ -237,9 +298,28 @@ class ReportServiceQueryTemplateTest {
             jasperTemplateRepository = jasperTemplateRepository,
             accessControl = accessControl,
             sqlExecClient = sqlExecClient,
-            hanaQueryService = HanaQueryService(null),
+            hanaQueryService = hanaQueryService,
             properties = DbInspectorProperties()
         )
+    }
+
+
+    private fun invokeCompareFieldValue(service: ReportService, v1: Any?, v2: Any?, tolerance: Double?): FieldComparison {
+        val method = ReportService::class.java.getDeclaredMethod(
+            "compareFieldValue",
+            Any::class.java,
+            Any::class.java,
+            java.math.BigDecimal::class.java
+        )
+        method.isAccessible = true
+
+        val toleranceBd = tolerance?.let { java.math.BigDecimal.valueOf(it) }
+
+        try {
+            return method.invoke(service, v1, v2, toleranceBd) as FieldComparison
+        } catch (ex: InvocationTargetException) {
+            throw ex.targetException
+        }
     }
 
     private fun invokeBuildQueryWithParams(
