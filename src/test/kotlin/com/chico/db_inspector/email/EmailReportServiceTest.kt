@@ -57,4 +57,37 @@ class EmailReportServiceTest {
         Mockito.verify(mailSender).createMimeMessage()
         Mockito.verify(mailSender).send(Mockito.any(MimeMessage::class.java))
     }
+
+    @Test
+    fun `sendReport should include custom message and extra attachment`() {
+        val mailSender = Mockito.mock(JavaMailSender::class.java)
+        val mimeMessage = MimeMessage(Session.getInstance(Properties()))
+        Mockito.`when`(mailSender.createMimeMessage()).thenReturn(mimeMessage)
+
+        val service = EmailReportService(
+            mailSender = mailSender,
+            properties = DbInspectorProperties(),
+            mapper = ObjectMapper()
+        )
+
+        val result = service.sendReport(
+            request = EmailReportRequest(
+                sql = "select 1",
+                to = "dev@example.com",
+                message = "Comparacao encontrou divergencia"
+            ),
+            queryResult = mapOf("data" to listOf(mapOf("id" to 1))),
+            extraAttachments = listOf(
+                EmailAttachment(
+                    filename = "report.pdf",
+                    contentType = "application/pdf",
+                    bytes = byteArrayOf(1, 2, 3)
+                )
+            )
+        )
+
+        assertTrue(result.sent)
+        assertTrue(result.attachedXlsx)
+        Mockito.verify(mailSender).send(Mockito.any(MimeMessage::class.java))
+    }
 }

@@ -6,6 +6,7 @@ import com.chico.dbinspector.web.UpstreamContext
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
 import org.mockito.Mockito
@@ -43,6 +44,8 @@ class EmailReportSchedulerTest {
 
         assertEquals("0 0 8 ? * MON,WED", response.cron)
         assertEquals("NORMAL", response.status)
+        assertEquals(true, response.sendOnlyIfDifferent)
+        assertTrue(response.comparisonTolerances.isEmpty())
 
         val triggerCaptor = ArgumentCaptor.forClass(Trigger::class.java)
         Mockito.verify(schedulerMock).scheduleJob(Mockito.any(JobDetail::class.java), triggerCaptor.capture())
@@ -92,6 +95,48 @@ class EmailReportSchedulerTest {
         Mockito.verify(schedulerMock).scheduleJob(Mockito.any(JobDetail::class.java), triggerCaptor.capture())
         val cronTrigger = triggerCaptor.value as CronTrigger
         assertEquals("America/Porto_Velho", cronTrigger.timeZone.id)
+    }
+
+    @Test
+    fun `scheduleDetailed should reject attachPdf without reportId`() {
+        val scheduler = createScheduler("America/Porto_Velho", Mockito.mock(Scheduler::class.java))
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            scheduler.scheduleDetailed(
+                body = EmailReportRequest(
+                    sql = "select 1",
+                    to = "dev@example.com",
+                    attachPdf = true,
+                    time = "08:00",
+                    days = listOf("mon")
+                ),
+                ctx = UpstreamContext("https://api.example.com/sql/exec/", "Bearer token"),
+                query = "select 1"
+            )
+        }
+
+        assertEquals("Para anexar PDF, informe 'reportId'", ex.message)
+    }
+
+    @Test
+    fun `scheduleDetailed should reject compareWithSap without secondSql`() {
+        val scheduler = createScheduler("America/Porto_Velho", Mockito.mock(Scheduler::class.java))
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            scheduler.scheduleDetailed(
+                body = EmailReportRequest(
+                    sql = "select 1",
+                    to = "dev@example.com",
+                    compareWithSap = true,
+                    time = "08:00",
+                    days = listOf("mon")
+                ),
+                ctx = UpstreamContext("https://api.example.com/sql/exec/", "Bearer token"),
+                query = "select 1"
+            )
+        }
+
+        assertEquals("Para comparar com SAP, informe 'secondSql'", ex.message)
     }
 
     private fun createScheduler(timeZone: String, scheduler: Scheduler): EmailReportScheduler {

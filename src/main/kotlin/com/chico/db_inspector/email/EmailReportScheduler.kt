@@ -95,6 +95,7 @@ class EmailReportScheduler(
 
     fun updateSchedule(id: String, body: EmailReportRequest, ctx: UpstreamContext, query: String): EmailScheduleResponse {
         ReadOnlySqlValidator.requireReadOnly(query)
+        validateAdvancedOptions(body)
         val key = findJobKey(id) ?: throw IllegalArgumentException("Agendamento nao encontrado")
         val (hour, minute) = parseTime(body.time)
         val days = parseDays(body.days)
@@ -110,6 +111,14 @@ class EmailReportScheduler(
             put("subject", body.subject ?: "")
             put("asDict", body.asDict ?: true)
             put("withDescription", body.withDescription ?: true)
+            put("message", body.message ?: "")
+            put("reportId", body.reportId?.toString() ?: "")
+            put("attachPdf", body.attachPdf ?: false)
+            put("compareWithSap", body.compareWithSap ?: false)
+            put("secondSql", body.secondSql ?: "")
+            put("comparisonKey", body.comparisonKey ?: "")
+            put("comparisonTolerances", serializeComparisonTolerances(body.comparisonTolerances))
+            put("sendOnlyIfDifferent", body.sendOnlyIfDifferent ?: true)
             put("time", body.time)
             put("days", days.joinToString(",") { it.name })
         }
@@ -147,6 +156,7 @@ class EmailReportScheduler(
 
     private fun scheduleInternal(body: EmailReportRequest, ctx: UpstreamContext, query: String): EmailScheduleResponse {
         ReadOnlySqlValidator.requireReadOnly(query)
+        validateAdvancedOptions(body)
         val (hour, minute) = parseTime(body.time)
         val days = parseDays(body.days)
         val cron = buildCron(hour, minute, days)
@@ -162,6 +172,14 @@ class EmailReportScheduler(
             .usingJobData("subject", body.subject ?: "")
             .usingJobData("asDict", body.asDict ?: true)
             .usingJobData("withDescription", body.withDescription ?: true)
+            .usingJobData("message", body.message ?: "")
+            .usingJobData("reportId", body.reportId?.toString() ?: "")
+            .usingJobData("attachPdf", body.attachPdf ?: false)
+            .usingJobData("compareWithSap", body.compareWithSap ?: false)
+            .usingJobData("secondSql", body.secondSql ?: "")
+            .usingJobData("comparisonKey", body.comparisonKey ?: "")
+            .usingJobData("comparisonTolerances", serializeComparisonTolerances(body.comparisonTolerances))
+            .usingJobData("sendOnlyIfDifferent", body.sendOnlyIfDifferent ?: true)
             .usingJobData("time", body.time)
             .usingJobData("days", days.joinToString(",") { it.name })
             .storeDurably()
@@ -193,8 +211,27 @@ class EmailReportScheduler(
                 cc = body.cc,
                 subject = body.subject,
                 asDict = body.asDict ?: true,
-                withDescription = body.withDescription ?: true
+                withDescription = body.withDescription ?: true,
+                message = body.message,
+                reportId = body.reportId,
+                attachPdf = body.attachPdf ?: false,
+                compareWithSap = body.compareWithSap ?: false,
+                secondSql = body.secondSql,
+                comparisonKey = body.comparisonKey,
+                comparisonTolerances = body.comparisonTolerances,
+                sendOnlyIfDifferent = body.sendOnlyIfDifferent ?: true
             )
+    }
+
+    private fun validateAdvancedOptions(body: EmailReportRequest) {
+        if (body.attachPdf == true) {
+            require(body.reportId != null) { "Para anexar PDF, informe 'reportId'" }
+        }
+        if (body.compareWithSap == true) {
+            val secondSql = body.secondSql?.trim()
+            require(!secondSql.isNullOrBlank()) { "Para comparar com SAP, informe 'secondSql'" }
+            ReadOnlySqlValidator.requireReadOnly(secondSql)
+        }
     }
 
     private fun parseTime(raw: String?): Pair<Int, Int> {
@@ -246,7 +283,32 @@ class EmailReportScheduler(
             cc = data.getString("cc"),
             subject = data.getString("subject"),
             asDict = data.getBooleanValue("asDict"),
-            withDescription = data.getBooleanValue("withDescription")
+            withDescription = data.getBooleanValue("withDescription"),
+            message = data.getString("message")?.takeIf { it.isNotBlank() },
+            reportId = data.getString("reportId")?.trim()?.takeIf { it.isNotBlank() }?.let { runCatching { UUID.fromString(it) }.getOrNull() },
+            attachPdf = data.getBooleanValue("attachPdf"),
+            compareWithSap = data.getBooleanValue("compareWithSap"),
+            secondSql = data.getString("secondSql")?.takeIf { it.isNotBlank() },
+            comparisonKey = data.getString("comparisonKey")?.takeIf { it.isNotBlank() },
+            comparisonTolerances = parseComparisonTolerances(data.getString("comparisonTolerances")),
+            sendOnlyIfDifferent = if (data.containsKey("sendOnlyIfDifferent")) data.getBooleanValue("sendOnlyIfDifferent") else true
         )
+    }
+
+    private fun serializeComparisonTolerances(tolerances: Map<String, Double>): String =
+        tolerances.entries.joinToString(";") { "${it.key}=${it.value}" }
+
+    private fun parseComparisonTolerances(raw: String?): Map<String, Double> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return raw.split(';')
+            .mapNotNull { entry ->
+                val idx = entry.indexOf('=')
+                if (idx <= 0 || idx >= entry.lastIndex) return@mapNotNull null
+                val key = entry.substring(0, idx).trim()
+                val value = entry.substring(idx + 1).trim().toDoubleOrNull() ?: return@mapNotNull null
+                if (key.isBlank()) return@mapNotNull null
+                key to value
+            }
+            .toMap()
     }
 }

@@ -16,6 +16,12 @@ data class EmailSendResult(
     val sent: Boolean
 )
 
+data class EmailAttachment(
+    val filename: String,
+    val contentType: String,
+    val bytes: ByteArray
+)
+
 @Service
 class EmailReportService(
     private val mailSender: JavaMailSender,
@@ -26,7 +32,11 @@ class EmailReportService(
     private val emailRegex = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
     private val subjectFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-    fun sendReport(request: EmailReportRequest, queryResult: Map<String, Any?>): EmailSendResult {
+    fun sendReport(
+        request: EmailReportRequest,
+        queryResult: Map<String, Any?>,
+        extraAttachments: List<EmailAttachment> = emptyList()
+    ): EmailSendResult {
         val to = parseEmails(request.to)
         val cc = parseEmails(request.cc)
         require(to.isNotEmpty()) { "Campo 'to' sem emails válidos" }
@@ -41,26 +51,38 @@ class EmailReportService(
 
         val tabular = EmailReportFormatter.toTabular(queryResult)
         val prettyJson = EmailReportFormatter.prettyJson(mapper, queryResult)
-        val html = EmailReportFormatter.buildHtmlPreview(tabular, properties.schedule.previewLimit, prettyJson)
+        val htmlBody = EmailReportFormatter.buildHtmlPreview(tabular, properties.schedule.previewLimit, prettyJson)
+        val html = buildHtmlWithMessage(request.message, htmlBody)
         val xlsxBytes = tabular?.let { EmailReportFormatter.buildXlsx(it, properties.schedule.attachmentRowLimit) }
 
         val attachXlsx = xlsxBytes != null && xlsxBytes.size <= properties.schedule.attachmentSizeLimitBytes
+        val attachments = mutableListOf<EmailAttachment>()
+        if (attachXlsx && xlsxBytes != null) {
+            attachments += EmailAttachment(
+                filename = "report.xlsx",
+                contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                bytes = xlsxBytes
+            )
+        }
+        attachments += extraAttachments
+
+        val hasAttachment = attachments.isNotEmpty()
         val subject = request.subject?.takeIf { it.isNotBlank() }
             ?: "DB Inspector Report - ${LocalDateTime.now().format(subjectFmt)}"
 
         val mimeMessage = mailSender.createMimeMessage()
-        val helper = MimeMessageHelper(mimeMessage, attachXlsx, "UTF-8")
+        val helper = MimeMessageHelper(mimeMessage, hasAttachment, "UTF-8")
         helper.setFrom(properties.mail.from)
         helper.setTo(to.toTypedArray())
         if (cc.isNotEmpty()) helper.setCc(cc.toTypedArray())
         helper.setSubject(subject)
         helper.setText(html, true)
 
-        if (attachXlsx && xlsxBytes != null) {
+        attachments.forEach { attachment ->
             helper.addAttachment(
-                "report.xlsx",
-                ByteArrayResource(xlsxBytes),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                attachment.filename,
+                ByteArrayResource(attachment.bytes),
+                attachment.contentType
             )
         }
         val previewRows = tabular?.rows?.size?.coerceAtMost(properties.schedule.previewLimit) ?: 0
@@ -116,5 +138,23 @@ class EmailReportService(
                 else -> true
             }
         }
+    }
+
+    private fun buildHtmlWithMessage(message: String?, htmlBody: String): String {
+        val customMessage = message?.trim().takeUnless { it.isNullOrBlank() } ?: return htmlBody
+        val escaped = customMessage
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&#39;")
+            .replace("\n", "<br/>")
+        return """
+            <div style="font-family: Arial, sans-serif; font-size:12px; margin-bottom:12px;">
+              <p><strong>Mensagem:</strong></p>
+              <p>$escaped</p>
+            </div>
+            $htmlBody
+        """.trimIndent()
     }
 }
