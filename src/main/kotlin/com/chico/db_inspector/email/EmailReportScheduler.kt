@@ -1,6 +1,9 @@
 package com.chico.dbinspector.email
 
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.report.ReportRunRequest
+import com.chico.dbinspector.report.ReportService
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
@@ -14,6 +17,7 @@ import org.quartz.TriggerKey
 import org.quartz.impl.matchers.GroupMatcher
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.math.BigDecimal
 import java.time.DayOfWeek
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -31,6 +35,8 @@ class EmailReportScheduler(
     private val scheduler: Scheduler,
     private val sqlExecClient: SqlExecClient,
     private val emailService: EmailReportService,
+    private val hanaQueryService: HanaQueryService,
+    private val reportService: ReportService,
     private val properties: DbInspectorProperties
 ) {
     private val log = LoggerFactory.getLogger(EmailReportScheduler::class.java)
@@ -52,15 +58,92 @@ class EmailReportScheduler(
         "sun" to DayOfWeek.SUNDAY
     )
 
-    fun sendNow(body: EmailReportRequest, ctx: UpstreamContext, query: String) =
-        ReadOnlySqlValidator.requireReadOnly(query).let {
-        sqlExecClient.exec(
+    fun sendNow(body: EmailReportRequest, ctx: UpstreamContext, query: String): EmailSendResult {
+        ReadOnlySqlValidator.requireReadOnly(query)
+        validateAdvancedOptions(body)
+
+        val result = sqlExecClient.exec(
             endpointUrl = ctx.endpointUrl,
             bearer = ctx.bearer,
             query = query,
             asDict = body.asDict ?: true,
             withDescription = body.withDescription ?: true
-        ).let { emailService.sendReport(body, it) }
+        )
+
+        val extraAttachments = mutableListOf<EmailAttachment>()
+        var payloadForEmail = result
+
+        if (body.attachPdf == true) {
+            val pdfMode = normalizePdfMode(body.pdfMode)
+            val pdfBytes = if (pdfMode == "scheduled_sql") {
+                emailService.generateScheduledSqlPdf(
+                    title = body.pdfTitle,
+                    subtitle = body.pdfSubtitle,
+                    includeSummary = body.pdfIncludeSummary ?: true,
+                    maxRows = body.pdfMaxRows ?: 2000,
+                    queryResult = result
+                )
+            } else {
+                val reportId = requireNotNull(body.reportId) { "Para anexar PDF, informe 'reportId'" }
+                reportService.generatePdf(reportId, ctx, ReportRunRequest())
+            }
+            val reportId = body.reportId
+            extraAttachments += EmailAttachment(
+                filename = if (pdfMode == "scheduled_sql") "agendamento-sql.pdf" else "report-$reportId.pdf",
+                contentType = "application/pdf",
+                bytes = pdfBytes
+            )
+        }
+
+        if (body.compareWithSap == true) {
+            val secondSql = body.secondSql?.trim().orEmpty()
+            val sourceRows = (result["data"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> } ?: emptyList()
+            val hanaResult = hanaQueryService.exec(secondSql)
+            val comparison = compareRows(
+                sourceRows = sourceRows,
+                source2Rows = hanaResult.rows,
+                comparisonKey = body.comparisonKey,
+                tolerances = body.comparisonTolerances
+            )
+            val sendOnlyIfDifferent = body.sendOnlyIfDifferent ?: true
+            if (sendOnlyIfDifferent && !comparison.hasDifference) {
+                return EmailSendResult(previewRows = 0, attachedXlsx = false, sent = false)
+            }
+
+            val comparisonWorkbook = EmailReportFormatter.buildComparisonWorkbook(
+                source1Label = "agromobi",
+                source1Rows = sourceRows,
+                source2Label = "sap",
+                source2Rows = hanaResult.rows,
+                maxRowsPerSheet = 50_000
+            )
+            extraAttachments += EmailAttachment(
+                filename = "comparacao-agromobi-sap.xlsx",
+                contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                bytes = comparisonWorkbook
+            )
+
+            payloadForEmail = mapOf(
+                "data" to listOf(
+                    mapOf(
+                        "status" to if (comparison.hasDifference) "DIVERGENCIA" else "SEM_DIVERGENCIA",
+                        "apenas_agromobi" to comparison.onlyInSource1,
+                        "apenas_sap" to comparison.onlyInSource2,
+                        "linhas_diferentes" to comparison.differentRows,
+                        "linhas_correspondentes" to comparison.matchedRows
+                    )
+                )
+            )
+        }
+
+        val includeTabularXlsx = body.attachXlsx ?: true
+        val includeDefaultTableAttachment = includeTabularXlsx && body.compareWithSap != true
+        return emailService.sendReport(
+            request = body,
+            queryResult = payloadForEmail,
+            extraAttachments = if (includeTabularXlsx) extraAttachments else emptyList(),
+            attachTabularXlsx = includeDefaultTableAttachment
+        )
     }
 
     private val jobGroup = "email-report"
@@ -111,10 +194,18 @@ class EmailReportScheduler(
             put("subject", body.subject ?: "")
             put("asDict", body.asDict ?: true)
             put("withDescription", body.withDescription ?: true)
+            put("attachXlsx", body.attachXlsx ?: true)
             put("message", body.message ?: "")
             put("reportId", body.reportId?.toString() ?: "")
             put("attachPdf", body.attachPdf ?: false)
+            put("pdfMode", normalizePdfMode(body.pdfMode))
+            put("pdfTitle", body.pdfTitle ?: "")
+            put("pdfSubtitle", body.pdfSubtitle ?: "")
+            put("pdfIncludeSummary", body.pdfIncludeSummary ?: true)
+            put("pdfMaxRows", body.pdfMaxRows ?: 2000)
             put("compareWithSap", body.compareWithSap ?: false)
+            put("comparisonTitle", body.comparisonTitle ?: "")
+            put("comparisonNote", body.comparisonNote ?: "")
             put("secondSql", body.secondSql ?: "")
             put("comparisonKey", body.comparisonKey ?: "")
             put("comparisonTolerances", serializeComparisonTolerances(body.comparisonTolerances))
@@ -172,10 +263,18 @@ class EmailReportScheduler(
             .usingJobData("subject", body.subject ?: "")
             .usingJobData("asDict", body.asDict ?: true)
             .usingJobData("withDescription", body.withDescription ?: true)
+            .usingJobData("attachXlsx", body.attachXlsx ?: true)
             .usingJobData("message", body.message ?: "")
             .usingJobData("reportId", body.reportId?.toString() ?: "")
             .usingJobData("attachPdf", body.attachPdf ?: false)
+            .usingJobData("pdfMode", normalizePdfMode(body.pdfMode))
+            .usingJobData("pdfTitle", body.pdfTitle ?: "")
+            .usingJobData("pdfSubtitle", body.pdfSubtitle ?: "")
+            .usingJobData("pdfIncludeSummary", body.pdfIncludeSummary ?: true)
+            .usingJobData("pdfMaxRows", body.pdfMaxRows ?: 2000)
             .usingJobData("compareWithSap", body.compareWithSap ?: false)
+            .usingJobData("comparisonTitle", body.comparisonTitle ?: "")
+            .usingJobData("comparisonNote", body.comparisonNote ?: "")
             .usingJobData("secondSql", body.secondSql ?: "")
             .usingJobData("comparisonKey", body.comparisonKey ?: "")
             .usingJobData("comparisonTolerances", serializeComparisonTolerances(body.comparisonTolerances))
@@ -212,10 +311,18 @@ class EmailReportScheduler(
                 subject = body.subject,
                 asDict = body.asDict ?: true,
                 withDescription = body.withDescription ?: true,
+                attachXlsx = body.attachXlsx ?: true,
                 message = body.message,
                 reportId = body.reportId,
                 attachPdf = body.attachPdf ?: false,
+                pdfMode = normalizePdfMode(body.pdfMode),
+                pdfTitle = body.pdfTitle,
+                pdfSubtitle = body.pdfSubtitle,
+                pdfIncludeSummary = body.pdfIncludeSummary ?: true,
+                pdfMaxRows = body.pdfMaxRows ?: 2000,
                 compareWithSap = body.compareWithSap ?: false,
+                comparisonTitle = body.comparisonTitle,
+                comparisonNote = body.comparisonNote,
                 secondSql = body.secondSql,
                 comparisonKey = body.comparisonKey,
                 comparisonTolerances = body.comparisonTolerances,
@@ -225,7 +332,11 @@ class EmailReportScheduler(
 
     private fun validateAdvancedOptions(body: EmailReportRequest) {
         if (body.attachPdf == true) {
-            require(body.reportId != null) { "Para anexar PDF, informe 'reportId'" }
+            val mode = normalizePdfMode(body.pdfMode)
+            if (mode == "report") {
+                require(body.reportId != null) { "Para anexar PDF com mode=report, informe 'reportId'" }
+            }
+            require((body.pdfMaxRows ?: 2000) > 0) { "'pdfMaxRows' deve ser maior que zero" }
         }
         if (body.compareWithSap == true) {
             val secondSql = body.secondSql?.trim()
@@ -284,10 +395,18 @@ class EmailReportScheduler(
             subject = data.getString("subject"),
             asDict = data.getBooleanValue("asDict"),
             withDescription = data.getBooleanValue("withDescription"),
+            attachXlsx = if (data.containsKey("attachXlsx")) data.getBooleanValue("attachXlsx") else true,
             message = data.getString("message")?.takeIf { it.isNotBlank() },
             reportId = data.getString("reportId")?.trim()?.takeIf { it.isNotBlank() }?.let { runCatching { UUID.fromString(it) }.getOrNull() },
             attachPdf = data.getBooleanValue("attachPdf"),
+            pdfMode = normalizePdfMode(data.getString("pdfMode")),
+            pdfTitle = data.getString("pdfTitle")?.takeIf { it.isNotBlank() },
+            pdfSubtitle = data.getString("pdfSubtitle")?.takeIf { it.isNotBlank() },
+            pdfIncludeSummary = if (data.containsKey("pdfIncludeSummary")) data.getBooleanValue("pdfIncludeSummary") else true,
+            pdfMaxRows = if (data.containsKey("pdfMaxRows")) data.getIntValue("pdfMaxRows") else 2000,
             compareWithSap = data.getBooleanValue("compareWithSap"),
+            comparisonTitle = data.getString("comparisonTitle")?.takeIf { it.isNotBlank() },
+            comparisonNote = data.getString("comparisonNote")?.takeIf { it.isNotBlank() },
             secondSql = data.getString("secondSql")?.takeIf { it.isNotBlank() },
             comparisonKey = data.getString("comparisonKey")?.takeIf { it.isNotBlank() },
             comparisonTolerances = parseComparisonTolerances(data.getString("comparisonTolerances")),
@@ -311,4 +430,108 @@ class EmailReportScheduler(
             }
             .toMap()
     }
+
+    private fun normalizePdfMode(raw: String?): String {
+        val mode = raw?.trim()?.lowercase()
+        return if (mode == "scheduled_sql") "scheduled_sql" else "report"
+    }
+
+    private fun compareRows(
+        sourceRows: List<Map<String, Any?>>,
+        source2Rows: List<Map<String, Any?>>,
+        comparisonKey: String?,
+        tolerances: Map<String, Double>
+    ): ComparisonStats {
+        val toleranceByField = tolerances.mapKeys { it.key.lowercase() }.mapValues { BigDecimal.valueOf(it.value) }
+        return if (comparisonKey.isNullOrBlank()) {
+            val remaining = source2Rows.toMutableList()
+            var differentRows = 0
+            var matchedRows = 0
+            sourceRows.forEach { row1 ->
+                val idx = remaining.indexOfFirst { row2 -> rowsEqualWithTolerance(row1, row2, toleranceByField) }
+                if (idx >= 0) {
+                    matchedRows++
+                    remaining.removeAt(idx)
+                } else {
+                    differentRows++
+                }
+            }
+            ComparisonStats(
+                hasDifference = differentRows > 0 || remaining.isNotEmpty(),
+                onlyInSource1 = differentRows,
+                onlyInSource2 = remaining.size,
+                differentRows = differentRows + remaining.size,
+                matchedRows = matchedRows
+            )
+        } else {
+            val rows1ByKey = sourceRows.groupBy { normalizeKey(it[comparisonKey]) }
+            val rows2ByKey = source2Rows.groupBy { normalizeKey(it[comparisonKey]) }
+            val allKeys = (rows1ByKey.keys + rows2ByKey.keys).distinct()
+            var onlyInSource1 = 0
+            var onlyInSource2 = 0
+            var differentRows = 0
+            var matchedRows = 0
+            allKeys.forEach { key ->
+                val l1 = rows1ByKey[key] ?: emptyList()
+                val l2 = rows2ByKey[key] ?: emptyList()
+                val matched = minOf(l1.size, l2.size)
+                if (l1.size > matched) onlyInSource1 += l1.size - matched
+                if (l2.size > matched) onlyInSource2 += l2.size - matched
+                repeat(matched) { idx ->
+                    if (rowsEqualWithTolerance(l1[idx], l2[idx], toleranceByField)) {
+                        matchedRows++
+                    } else {
+                        differentRows++
+                    }
+                }
+            }
+            ComparisonStats(
+                hasDifference = onlyInSource1 > 0 || onlyInSource2 > 0 || differentRows > 0,
+                onlyInSource1 = onlyInSource1,
+                onlyInSource2 = onlyInSource2,
+                differentRows = differentRows,
+                matchedRows = matchedRows
+            )
+        }
+    }
+
+    private fun rowsEqualWithTolerance(
+        row1: Map<String, Any?>,
+        row2: Map<String, Any?>,
+        tolerances: Map<String, BigDecimal>
+    ): Boolean {
+        val allColumns = (row1.keys + row2.keys).toSet()
+        return allColumns.all { col ->
+            val tolerance = tolerances[col.lowercase()]
+            valuesEqual(row1[col], row2[col], tolerance)
+        }
+    }
+
+    private fun valuesEqual(v1: Any?, v2: Any?, tolerance: BigDecimal?): Boolean {
+        if (v1 == null && v2 == null) return true
+        if (v1 == null || v2 == null) return false
+        val bd1 = runCatching { BigDecimal(v1.toString().trim()) }.getOrNull()
+        val bd2 = runCatching { BigDecimal(v2.toString().trim()) }.getOrNull()
+        if (bd1 != null && bd2 != null) {
+            val delta = (bd1 - bd2).abs()
+            return tolerance?.let { delta <= it } ?: (bd1.compareTo(bd2) == 0)
+        }
+        return v1.toString().trim().lowercase() == v2.toString().trim().lowercase()
+    }
+
+    private fun normalizeKey(value: Any?): String? {
+        if (value == null) return null
+        val text = value.toString().trim()
+        if (text.isEmpty()) return null
+        val numeric = runCatching { BigDecimal(text) }.getOrNull()
+        return numeric?.stripTrailingZeros()?.toPlainString() ?: text.lowercase()
+    }
+
+    private data class ComparisonStats(
+        val hasDifference: Boolean,
+        val onlyInSource1: Int,
+        val onlyInSource2: Int,
+        val differentRows: Int,
+        val matchedRows: Int
+    )
 }

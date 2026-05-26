@@ -1,6 +1,8 @@
 package com.chico.dbinspector.email
 
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.report.ReportService
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -115,7 +117,7 @@ class EmailReportSchedulerTest {
             )
         }
 
-        assertEquals("Para anexar PDF, informe 'reportId'", ex.message)
+        assertEquals("Para anexar PDF com mode=report, informe 'reportId'", ex.message)
     }
 
     @Test
@@ -158,6 +160,8 @@ class EmailReportSchedulerTest {
             scheduler = scheduler,
             sqlExecClient = sqlExecClient,
             emailService = emailService,
+            hanaQueryService = HanaQueryService(null),
+            reportService = Mockito.mock(ReportService::class.java),
             properties = properties
         )
     }
