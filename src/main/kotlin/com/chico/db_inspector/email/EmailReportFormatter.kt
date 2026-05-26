@@ -12,6 +12,14 @@ data class TabularResult(
 
 object EmailReportFormatter {
 
+    data class ComparisonSummary(
+        val hasDifference: Boolean,
+        val onlyInSource1: Int,
+        val onlyInSource2: Int,
+        val differentRows: Int,
+        val matchedRows: Int
+    )
+
     fun toTabular(result: Map<String, Any?>): TabularResult? {
         val dataField = result["data"]
         if (dataField !is List<*>) return null
@@ -112,6 +120,59 @@ object EmailReportFormatter {
         }
     }
 
+    fun buildComparisonWorkbook(
+        source1Label: String,
+        source1Rows: List<Map<String, Any?>>,
+        source2Label: String,
+        source2Rows: List<Map<String, Any?>>,
+        maxRowsPerSheet: Int
+    ): ByteArray {
+        val workbook = XSSFWorkbook()
+        return workbook.use { wb ->
+            addMapRowsSheet(wb, "agromobi", source1Label, source1Rows, maxRowsPerSheet)
+            addMapRowsSheet(wb, "sap", source2Label, source2Rows, maxRowsPerSheet)
+            java.io.ByteArrayOutputStream().use { output ->
+                wb.write(output)
+                output.toByteArray()
+            }
+        }
+    }
+
+    fun buildExecutiveComparisonHtml(
+        summary: ComparisonEmailSummary,
+        title: String?,
+        note: String?
+    ): String {
+        val isDivergence = summary.status.equals("DIVERGENCIA", ignoreCase = true)
+        val badgeBg = if (isDivergence) "#fee2e2" else "#dcfce7"
+        val badgeColor = if (isDivergence) "#991b1b" else "#166534"
+        val totalDif = summary.apenasAgromobi + summary.apenasSap + summary.linhasDiferentes
+        val totalBase = totalDif + summary.linhasCorrespondentes
+        val percentual = if (totalBase == 0) 0.0 else (totalDif * 100.0 / totalBase)
+        val resolvedTitle = title?.trim().takeUnless { it.isNullOrBlank() } ?: "Comparacao Agromobi x SAP"
+        val resolvedNote = note?.trim().takeUnless { it.isNullOrBlank() } ?: "Consulte o anexo para detalhes por origem."
+        return """
+            <div style="font-family: Arial, sans-serif; color:#111827; font-size:13px; line-height:1.45;">
+              <h2 style="margin:0 0 8px 0; font-size:18px;">${escapeHtml(resolvedTitle)}</h2>
+              <div style="display:inline-block; padding:6px 10px; border-radius:999px; background:$badgeBg; color:$badgeColor; font-weight:700; margin-bottom:12px;">
+                ${if (isDivergence) "Divergencia detectada" else "Sem divergencia"}
+              </div>
+              <table cellspacing="0" cellpadding="0" style="border-collapse:separate; border-spacing:10px 10px; width:100%; max-width:740px;">
+                <tr>
+                  ${metricCard("Apenas no Agromobi", summary.apenasAgromobi.toString())}
+                  ${metricCard("Apenas no SAP", summary.apenasSap.toString())}
+                </tr>
+                <tr>
+                  ${metricCard("Linhas divergentes", summary.linhasDiferentes.toString())}
+                  ${metricCard("Linhas correspondentes", summary.linhasCorrespondentes.toString())}
+                </tr>
+              </table>
+              <p style="margin:10px 0 0 0;"><strong>Percentual de divergencia:</strong> ${"%.2f".format(percentual)}%</p>
+              <p style="margin:6px 0 0 0; color:#4b5563;">${escapeHtml(resolvedNote)}</p>
+            </div>
+        """.trimIndent()
+    }
+
     fun prettyJson(mapper: ObjectMapper, result: Map<String, Any?>): String {
         val prettyMapper = mapper.copy().enable(SerializationFeature.INDENT_OUTPUT)
         return prettyMapper.writeValueAsString(result)
@@ -133,4 +194,45 @@ object EmailReportFormatter {
             .replace("\"", "&quot;")
             .replace("'", "&#39;")
     }
+
+    private fun addMapRowsSheet(
+        workbook: XSSFWorkbook,
+        fallbackName: String,
+        label: String,
+        rows: List<Map<String, Any?>>,
+        maxRows: Int
+    ) {
+        val name = sanitizeSheetName(label.ifBlank { fallbackName })
+        val sheet = workbook.createSheet(name)
+        val firstRow = rows.firstOrNull()
+        val columns = firstRow?.keys?.toList() ?: emptyList()
+        val header = sheet.createRow(0)
+        columns.forEachIndexed { index, column ->
+            header.createCell(index).setCellValue(column)
+        }
+
+        rows.take(maxRows).forEachIndexed { idx, rowValues ->
+            val row = sheet.createRow(idx + 1)
+            columns.forEachIndexed { colIndex, key ->
+                row.createCell(colIndex).setCellValue(rowValues[key]?.toString() ?: "")
+            }
+        }
+
+        columns.indices.forEach { col -> sheet.autoSizeColumn(col) }
+    }
+
+    private fun sanitizeSheetName(raw: String): String {
+        val cleaned = raw.replace(Regex("[\\\\/*?:\\[\\]]"), "_").trim()
+        if (cleaned.isBlank()) return "sheet"
+        return cleaned.take(31)
+    }
+
+    private fun metricCard(label: String, value: String): String = """
+        <td style="vertical-align:top; width:50%;">
+          <div style="border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; background:#f9fafb;">
+            <div style="font-size:12px; color:#6b7280;">$label</div>
+            <div style="font-size:24px; font-weight:700; color:#111827; margin-top:2px;">$value</div>
+          </div>
+        </td>
+    """.trimIndent()
 }
