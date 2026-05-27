@@ -25,6 +25,7 @@ import java.math.BigDecimal
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -34,6 +35,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Date
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.security.MessageDigest
 
 @Service
 class ReportService(
@@ -51,6 +54,8 @@ class ReportService(
         private const val JASPER_JDT_COMPILER = "net.sf.jasperreports.jdt.JRJdtCompiler"
         private const val DEFAULT_PAGE_SIZE = 200
         private const val MAX_PAGE_SIZE = 1_000
+        private const val COLUMNS_CACHE_TTL_SECONDS = 900L
+        private const val COLUMNS_QUERY_TIMEOUT_SECONDS = 3
     }
 
     private val log = LoggerFactory.getLogger(ReportService::class.java)
@@ -63,6 +68,7 @@ class ReportService(
     private val placeholderRegex = Regex("(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
     private val writeKeywordsRegex =
         Regex("\\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\\b", RegexOption.IGNORE_CASE)
+    private val columnsCache = ConcurrentHashMap<String, CachedColumns>()
 
     fun list(): List<ReportResponse> =
         repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
@@ -234,6 +240,69 @@ class ReportService(
             source2 = source2,
             diff = diff
         )
+    }
+
+    fun columns(
+        id: UUID,
+        ctx: UpstreamContext,
+        source: String = "both",
+        includeTypes: Boolean = false,
+        refresh: Boolean = false
+    ): ReportColumnsResponse {
+        val entity = repository.findById(id).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        accessControl.requireReportAccess(entity, AccessAction.RUN)
+
+        val normalizedSource = normalizeColumnsSource(source)
+        val cacheKey = columnsCacheKey(entity, normalizedSource, includeTypes)
+        val now = Instant.now(clock)
+        val cached = columnsCache[cacheKey]
+        if (!refresh && cached != null && cached.expiresAt.isAfter(now)) {
+            log.info("report_columns reportId={} source={} elapsedMs={} cacheHit={}", id, normalizedSource, 0, true)
+            return cached.response.copy(
+                generatedAt = now.toString(),
+                cache = ReportColumnsCacheInfo(hit = true, ttlSeconds = COLUMNS_CACHE_TTL_SECONDS)
+            )
+        }
+
+        val startedAt = System.nanoTime()
+        val sources = linkedMapOf<String, ReportColumnsSourceResponse>()
+        if (normalizedSource == "primary" || normalizedSource == "both") {
+            sources["primary"] = ReportColumnsSourceResponse(
+                label = "Agromobi",
+                columns = extractPrimaryColumns(entity, ctx, includeTypes)
+            )
+        }
+        if (normalizedSource == "secondary" || normalizedSource == "both") {
+            val secondSql = entity.secondSql?.trim().takeUnless { it.isNullOrBlank() }
+                ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Relatorio sem SQL secundario configurado")
+            sources["secondary"] = ReportColumnsSourceResponse(
+                label = "SAP HANA",
+                columns = extractSecondaryColumns(entity, secondSql, includeTypes)
+            )
+        }
+
+        val mergedColumns = sources.values
+            .flatMap { it.columns.map { col -> col.name } }
+            .distinct()
+
+        val response = ReportColumnsResponse(
+            reportId = id.toString(),
+            generatedAt = now.toString(),
+            cache = ReportColumnsCacheInfo(hit = false, ttlSeconds = COLUMNS_CACHE_TTL_SECONDS),
+            sources = sources,
+            mergedColumns = mergedColumns
+        )
+
+        columnsCache[cacheKey] = CachedColumns(
+            response = response,
+            expiresAt = now.plusSeconds(COLUMNS_CACHE_TTL_SECONDS)
+        )
+
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        log.info("report_columns reportId={} source={} elapsedMs={} cacheHit={}", id, normalizedSource, elapsedMs, false)
+        return response
     }
 
     fun generatePdf(id: UUID, ctx: UpstreamContext, request: ReportRunRequest): ByteArray {
@@ -667,6 +736,83 @@ class ReportService(
         return ReadOnlySqlValidator.validate(queryTemplate)
     }
 
+    private fun extractPrimaryColumns(entity: ReportEntity, ctx: UpstreamContext, includeTypes: Boolean): List<ReportColumnMeta> {
+        val queryTemplate = entity.sql.trim()
+        if (queryTemplate.isBlank()) {
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL primaria invalida para extracao de metadados")
+        }
+        val renderedQuery = buildQueryWithParams(queryTemplate, entity.variables, emptyMap(), enforceRequired = false)
+        val metadataQuery = "SELECT * FROM (${renderedQuery.trim().trimEnd(';')}) dbi_primary_meta WHERE 1 = 0"
+        return try {
+            val result = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, metadataQuery, true, true)
+            val description = result["description"] as? List<*>
+            val columns = description?.mapNotNull { raw ->
+                val column = raw as? Map<*, *> ?: return@mapNotNull null
+                val name = (column["name"] ?: column["column_name"] ?: column["columnName"] ?: column["field"])?.toString()
+                    ?: return@mapNotNull null
+                val rawType = (column["type"] ?: column["data_type"] ?: column["type_name"])?.toString()
+                ReportColumnMeta(
+                    name = name,
+                    type = if (includeTypes) normalizeColumnType(rawType) else null
+                )
+            }.orEmpty()
+            columns.distinctBy { it.name }
+        } catch (_: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL primaria invalida para extracao de metadados")
+        } catch (ex: Exception) {
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Falha ao extrair metadados da origem primaria")
+        }
+    }
+
+    private fun extractSecondaryColumns(entity: ReportEntity, secondSql: String, includeTypes: Boolean): List<ReportColumnMeta> {
+        val renderedQuery = buildQueryWithParams(secondSql, entity.variables, emptyMap(), enforceRequired = false)
+        return try {
+            hanaQueryService.extractColumns(renderedQuery, COLUMNS_QUERY_TIMEOUT_SECONDS).map {
+                ReportColumnMeta(
+                    name = it.name,
+                    type = if (includeTypes) it.type else null
+                )
+            }
+        } catch (ex: ResponseStatusException) {
+            if (ex.statusCode == HttpStatus.SERVICE_UNAVAILABLE) {
+                throw ex
+            }
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL secundaria invalida para extracao de metadados")
+        } catch (_: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL secundaria invalida para extracao de metadados")
+        }
+    }
+
+    private fun normalizeColumnsSource(source: String): String {
+        val value = source.trim().lowercase()
+        if (value !in setOf("primary", "secondary", "both")) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Parametro 'source' invalido")
+        }
+        return value
+    }
+
+    private fun columnsCacheKey(entity: ReportEntity, source: String, includeTypes: Boolean): String {
+        val sqlHash = sha256Hex("${entity.sql}|${entity.secondSql.orEmpty()}")
+        return "${entity.id}:$source:$includeTypes:$sqlHash"
+    }
+
+    private fun sha256Hex(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+    private fun normalizeColumnType(rawType: String?): String {
+        val value = rawType?.trim()?.uppercase().orEmpty()
+        return when {
+            value.isBlank() -> "unknown"
+            value.contains("BOOL") || value == "BIT" -> "boolean"
+            value.contains("TIMESTAMP") || value.contains("TIME") -> "datetime"
+            value.contains("DATE") -> "date"
+            value.contains("INT") || value.contains("DEC") || value.contains("NUM") || value.contains("FLOAT") || value.contains("DOUBLE") -> "number"
+            else -> "string"
+        }
+    }
+
     private fun resolveVariableValue(
         variable: ReportVariableEntity,
         params: Map<String, Any?>,
@@ -972,8 +1118,13 @@ class ReportService(
     private data class ExecutionResult(
         val query: String,
         val columns: List<String>,
-        val allRows: List<Map<String, Any?>>,
+        val allRows: List<Map<String, Any?>>, 
         val elapsedMs: Long
+    )
+
+    private data class CachedColumns(
+        val response: ReportColumnsResponse,
+        val expiresAt: Instant
     )
 
     private data class PaginatedExecutionResult(

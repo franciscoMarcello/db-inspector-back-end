@@ -243,3 +243,26 @@ data class ComparisonResponse(
     val source2: ComparisonSource,
     val diff: ComparisonDiff?
 )
+
+data class ReportColumnsCacheInfo(
+    val hit: Boolean,
+    val ttlSeconds: Long
+)
+
+data class ReportColumnMeta(
+    val name: String,
+    val type: String? = null
+)
+
+data class ReportColumnsSourceResponse(
+    val label: String,
+    val columns: List<ReportColumnMeta>
+)
+
+data class ReportColumnsResponse(
+    val reportId: String,
+    val generatedAt: String,
+    val cache: ReportColumnsCacheInfo,
+    val sources: Map<String, ReportColumnsSourceResponse>,
+    val mergedColumns: List<String>
+)
