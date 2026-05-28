@@ -16,12 +16,9 @@ class AdminUserService(
     private val rolePermissionRepository: RolePermissionRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
     private val auditService: AdminAuditService,
+    private val roleManagementService: AdminRoleManagementService,
     private val passwordEncoder: PasswordEncoder
 ) {
-    companion object {
-        private val protectedRoles = setOf("ADMIN")
-        private val permissionLockedRoles = setOf("ADMIN")
-    }
 
     fun listUsers(): List<AdminUserResponse> =
         userRepository.findAll()
@@ -167,94 +164,19 @@ class AdminUserService(
         )
     }
 
-    fun listRoles(): List<AdminRoleResponse> =
-        roleRepository.findAllByOrderByNameAsc().map { role ->
-            toAdminRoleResponse(role)
-        }
+    fun listRoles(): List<AdminRoleResponse> = roleManagementService.listRoles()
 
-    fun getRole(roleName: String): AdminRoleResponse {
-        val role = findRoleByName(roleName)
-        return toAdminRoleResponse(role)
-    }
+    fun getRole(roleName: String): AdminRoleResponse = roleManagementService.getRole(roleName)
 
     @Transactional
-    fun createRole(request: AdminCreateRoleRequest): AdminRoleResponse {
-        val roleName = normalizeRoleName(request.name)
-        if (roleRepository.findByNameIgnoreCase(roleName).isPresent) {
-            throw ResponseStatusException(HttpStatus.CONFLICT, "Role '$roleName' ja existe")
-        }
-
-        val role = roleRepository.save(RoleEntity(name = roleName))
-        val roleId = role.id ?: error("Role sem id")
-        syncRolePermissions(roleId, normalizePermissionCodes(request.permissions))
-        auditService.log(
-            action = "ADMIN_ROLE_CREATE",
-            targetType = "ROLE",
-            targetId = roleName,
-            details = mapOf("permissions" to request.permissions)
-        )
-        return toAdminRoleResponse(role)
-    }
+    fun createRole(request: AdminCreateRoleRequest): AdminRoleResponse = roleManagementService.createRole(request)
 
     @Transactional
-    fun updateRole(currentRoleName: String, request: AdminUpdateRoleRequest): AdminRoleResponse {
-        val role = findRoleByName(currentRoleName)
-        val roleId = role.id ?: error("Role sem id")
-        val currentName = role.name.uppercase()
-
-        request.name?.trim()?.takeIf { it.isNotBlank() }?.let { newNameRaw ->
-            val newName = normalizeRoleName(newNameRaw)
-            if (protectedRoles.contains(currentName) && newName != currentName) {
-                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Nao e permitido renomear role de sistema")
-            }
-            if (!currentName.equals(newName, ignoreCase = true) && roleRepository.findByNameIgnoreCase(newName).isPresent) {
-                throw ResponseStatusException(HttpStatus.CONFLICT, "Role '$newName' ja existe")
-            }
-            role.name = newName
-            roleRepository.save(role)
-        }
-
-        request.permissions?.let { permissionCodes ->
-            val normalized = normalizePermissionCodes(permissionCodes)
-            if (permissionLockedRoles.contains(currentName)) {
-                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Nao e permitido alterar permissoes da role ADMIN")
-            }
-            if (protectedRoles.contains(currentName) && normalized.isEmpty()) {
-                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Role de sistema nao pode ficar sem permissao")
-            }
-            syncRolePermissions(roleId, normalized)
-        }
-        auditService.log(
-            action = "ADMIN_ROLE_UPDATE",
-            targetType = "ROLE",
-            targetId = role.id?.toString(),
-            details = mapOf("name" to role.name, "permissions" to (request.permissions ?: emptyList<String>()))
-        )
-
-        return toAdminRoleResponse(role)
-    }
+    fun updateRole(currentRoleName: String, request: AdminUpdateRoleRequest): AdminRoleResponse =
+        roleManagementService.updateRole(currentRoleName, request)
 
     @Transactional
-    fun deleteRole(roleName: String) {
-        val role = findRoleByName(roleName)
-        val normalizedName = role.name.uppercase()
-        if (protectedRoles.contains(normalizedName)) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Nao e permitido excluir role de sistema")
-        }
-
-        val roleId = role.id ?: error("Role sem id")
-        if (userRoleRepository.existsByRoleId(roleId)) {
-            throw ResponseStatusException(HttpStatus.CONFLICT, "Role vinculada a usuarios")
-        }
-
-        rolePermissionRepository.findAllByRoleId(roleId).forEach { rolePermissionRepository.delete(it) }
-        roleRepository.delete(role)
-        auditService.log(
-            action = "ADMIN_ROLE_DELETE",
-            targetType = "ROLE",
-            targetId = role.name
-        )
-    }
+    fun deleteRole(roleName: String) = roleManagementService.deleteRole(roleName)
 
     private fun assignRoles(user: AppUserEntity, roleNames: List<String>) {
         val userId = user.id ?: error("Usuario sem id")

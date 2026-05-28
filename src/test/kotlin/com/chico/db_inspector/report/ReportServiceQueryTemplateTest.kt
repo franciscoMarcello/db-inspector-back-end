@@ -297,6 +297,19 @@ class ReportServiceQueryTemplateTest {
             folderRepository = folderRepository,
             jasperTemplateRepository = jasperTemplateRepository,
             accessControl = accessControl,
+            queryService = ReportQueryService(),
+            executionService = ReportExecutionService(sqlExecClient, ReportQueryService()),
+            variableService = ReportVariableService(),
+            columnsService = ReportColumnsService(
+                sqlExecClient = sqlExecClient,
+                hanaQueryService = hanaQueryService,
+                queryService = ReportQueryService()
+            ),
+            pdfService = ReportPdfService(),
+            mapperService = ReportMapperService(),
+            validationService = ReportValidationService(ReportVariableService(), ReportQueryService(), sqlExecClient),
+            summaryService = ReportSummaryService(),
+            comparisonService = ReportComparisonService(),
             sqlExecClient = sqlExecClient,
             hanaQueryService = hanaQueryService,
             properties = DbInspectorProperties()

@@ -160,9 +160,10 @@ class EmailReportSchedulerTest {
             scheduler = scheduler,
             sqlExecClient = sqlExecClient,
             emailService = emailService,
+            comparisonService = EmailComparisonService(),
             hanaQueryService = HanaQueryService(null),
             reportService = Mockito.mock(ReportService::class.java),
-            properties = properties
+            cronService = EmailScheduleCronService(properties)
         )
     }
 }
