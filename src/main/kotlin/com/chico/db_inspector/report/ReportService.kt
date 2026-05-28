@@ -1,42 +1,19 @@
 package com.chico.dbinspector.report
 
 import com.chico.dbinspector.config.DbInspectorProperties
-import com.chico.dbinspector.email.EmailReportFormatter
 import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.util.ReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
-import net.sf.jasperreports.engine.DefaultJasperReportsContext
-import net.sf.jasperreports.engine.JRField
-import net.sf.jasperreports.engine.JRException
-import net.sf.jasperreports.engine.JRParameter
-import net.sf.jasperreports.engine.JRPropertiesUtil
-import net.sf.jasperreports.engine.JasperCompileManager
-import net.sf.jasperreports.engine.JasperExportManager
-import net.sf.jasperreports.engine.JasperFillManager
-import net.sf.jasperreports.engine.data.JRMapCollectionDataSource
 import org.springframework.data.domain.Sort
 import org.springframework.http.HttpStatus
-import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
-import java.io.ByteArrayInputStream
 import java.math.BigDecimal
-import java.math.BigInteger
-import java.nio.charset.StandardCharsets
 import java.time.Clock
-import java.time.Instant
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
-import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
-import java.util.Date
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.security.MessageDigest
 
 @Service
 class ReportService(
@@ -44,36 +21,32 @@ class ReportService(
     private val folderRepository: ReportFolderRepository,
     private val jasperTemplateRepository: ReportJasperTemplateRepository,
     private val accessControl: ReportAccessControlService,
+    private val queryService: ReportQueryService,
+    private val executionService: ReportExecutionService,
+    private val variableService: ReportVariableService,
+    private val columnsService: ReportColumnsService,
+    private val pdfService: ReportPdfService,
+    private val mapperService: ReportMapperService,
+    private val validationService: ReportValidationService,
+    private val summaryService: ReportSummaryService,
+    private val comparisonService: ReportComparisonService,
     private val sqlExecClient: SqlExecClient,
     private val hanaQueryService: HanaQueryService,
     private val properties: DbInspectorProperties,
     private val clock: Clock = Clock.systemDefaultZone()
 ) {
     companion object {
-        private const val LOGO_RESOURCE_PATH = "reports/logo.png"
-        private const val JASPER_JDT_COMPILER = "net.sf.jasperreports.jdt.JRJdtCompiler"
         private const val DEFAULT_PAGE_SIZE = 200
         private const val MAX_PAGE_SIZE = 1_000
-        private const val COLUMNS_CACHE_TTL_SECONDS = 900L
-        private const val COLUMNS_QUERY_TIMEOUT_SECONDS = 3
     }
 
-    private val log = LoggerFactory.getLogger(ReportService::class.java)
     private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-    private val dateTimeSqlFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-    private val allowedVariableTypes = setOf("string", "number", "date", "datetime", "boolean")
-    private val optionColumnValor = "valor"
-    private val optionColumnDescricao = "descricao"
     private val defaultFilterOptionsLimit = 100
-    private val placeholderRegex = Regex("(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
-    private val writeKeywordsRegex =
-        Regex("\\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\\b", RegexOption.IGNORE_CASE)
-    private val columnsCache = ConcurrentHashMap<String, CachedColumns>()
 
     fun list(): List<ReportResponse> =
         repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
             .filter { accessControl.canViewReport(it) }
-            .map { it.toResponse() }
+            .map { mapperService.toResponse(it) }
 
     fun create(request: ReportRequest): ReportResponse {
         request.folderId?.let { accessControl.requireFolderAccess(it, AccessAction.EDIT) }
@@ -92,8 +65,8 @@ class ReportService(
         )
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
         ReadOnlySqlValidator.requireReadOnly(entity.sql)
-        entity.replaceVariables(normalizeVariables(request.variables))
-        return repository.save(entity).toResponse()
+        entity.replaceVariables(variableService.normalizeVariables(request.variables))
+        return mapperService.toResponse(repository.save(entity))
     }
 
     fun update(id: UUID, request: ReportRequest): ReportResponse {
@@ -115,8 +88,8 @@ class ReportService(
         entity.jasperTemplate = resolveJasperTemplate(request.jasperTemplateId)
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
         ReadOnlySqlValidator.requireReadOnly(entity.sql)
-        entity.replaceVariables(normalizeVariables(request.variables))
-        return repository.save(entity).toResponse()
+        entity.replaceVariables(variableService.normalizeVariables(request.variables))
+        return mapperService.toResponse(repository.save(entity))
     }
 
     fun delete(id: UUID) {
@@ -135,7 +108,7 @@ class ReportService(
         val page = (request.page ?: 0).coerceAtLeast(0)
         val size = (request.size ?: DEFAULT_PAGE_SIZE).coerceIn(1, MAX_PAGE_SIZE)
         val execution = executeReportPage(entity, ctx, request.params, page, size)
-        val summaries = computeSummaries(execution.columns, execution.rows)
+        val summaries = summaryService.compute(execution.columns, execution.rows)
 
         val now = ZonedDateTime.now(clock)
         val meta = ReportRunMeta(
@@ -165,7 +138,7 @@ class ReportService(
         }
         accessControl.requireReportAccess(entity, AccessAction.RUN)
         val execution = executeReport(entity, ctx, request.params)
-        val summaries = computeSummaries(execution.columns, execution.allRows)
+        val summaries = summaryService.compute(execution.columns, execution.allRows)
         val totalRows = execution.allRows.size
 
         val now = ZonedDateTime.now(clock)
@@ -226,11 +199,11 @@ class ReportService(
         }
 
         val commonColumns = (execution1.columns.toSet() intersect hanaResult.columns.toSet()) - setOfNotNull(comparisonKey)
-        val toleranceByField = normalizeComparisonTolerances(request.comparisonTolerances)
+        val toleranceByField = comparisonService.normalizeTolerances(request.comparisonTolerances)
         val diff = if (comparisonKey != null) {
-            buildKeyedComparisonDiff(source1, source2, comparisonKey, commonColumns, toleranceByField)
+            comparisonService.buildKeyedDiff(source1, source2, comparisonKey, commonColumns, toleranceByField)
         } else {
-            buildContentComparisonDiff(source1, source2, commonColumns, toleranceByField)
+            comparisonService.buildContentDiff(source1, source2, commonColumns, toleranceByField)
         }
 
         return ComparisonResponse(
@@ -254,222 +227,20 @@ class ReportService(
         }
         accessControl.requireReportAccess(entity, AccessAction.RUN)
 
-        val normalizedSource = normalizeColumnsSource(source)
-        val cacheKey = columnsCacheKey(entity, normalizedSource, includeTypes)
-        val now = Instant.now(clock)
-        val cached = columnsCache[cacheKey]
-        if (!refresh && cached != null && cached.expiresAt.isAfter(now)) {
-            log.info("report_columns reportId={} source={} elapsedMs={} cacheHit={}", id, normalizedSource, 0, true)
-            return cached.response.copy(
-                generatedAt = now.toString(),
-                cache = ReportColumnsCacheInfo(hit = true, ttlSeconds = COLUMNS_CACHE_TTL_SECONDS)
-            )
-        }
-
-        val startedAt = System.nanoTime()
-        val sources = linkedMapOf<String, ReportColumnsSourceResponse>()
-        if (normalizedSource == "primary" || normalizedSource == "both") {
-            sources["primary"] = ReportColumnsSourceResponse(
-                label = "Agromobi",
-                columns = extractPrimaryColumns(entity, ctx, includeTypes)
-            )
-        }
-        if (normalizedSource == "secondary" || normalizedSource == "both") {
-            val secondSql = entity.secondSql?.trim().takeUnless { it.isNullOrBlank() }
-                ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Relatorio sem SQL secundario configurado")
-            sources["secondary"] = ReportColumnsSourceResponse(
-                label = "SAP HANA",
-                columns = extractSecondaryColumns(entity, secondSql, includeTypes)
-            )
-        }
-
-        val mergedColumns = sources.values
-            .flatMap { it.columns.map { col -> col.name } }
-            .distinct()
-
-        val response = ReportColumnsResponse(
-            reportId = id.toString(),
-            generatedAt = now.toString(),
-            cache = ReportColumnsCacheInfo(hit = false, ttlSeconds = COLUMNS_CACHE_TTL_SECONDS),
-            sources = sources,
-            mergedColumns = mergedColumns
-        )
-
-        columnsCache[cacheKey] = CachedColumns(
-            response = response,
-            expiresAt = now.plusSeconds(COLUMNS_CACHE_TTL_SECONDS)
-        )
-
-        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
-        log.info("report_columns reportId={} source={} elapsedMs={} cacheHit={}", id, normalizedSource, elapsedMs, false)
-        return response
+        return columnsService.columns(entity, id, ctx, source, includeTypes, refresh)
     }
 
     fun generatePdf(id: UUID, ctx: UpstreamContext, request: ReportRunRequest): ByteArray {
-        val totalStart = System.nanoTime()
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
         accessControl.requireReportAccess(entity, AccessAction.RUN)
-        val jasperTemplate = entity.jasperTemplate ?: throw ResponseStatusException(
-            HttpStatus.BAD_REQUEST,
-            "Relatorio sem template Jasper vinculado"
-        )
-
         val execution = executeReport(entity, ctx, request.params)
-        val sanitizedJrxml = sanitizeJrxml(jasperTemplate.jrxml)
-        val templateBytes = sanitizedJrxml.toByteArray(StandardCharsets.UTF_8)
-
-        try {
-            configureJasperCompiler()
-            val compileStart = System.nanoTime()
-            val jasperReport = ByteArrayInputStream(templateBytes).use { input ->
-                JasperCompileManager.compileReport(input)
-            }
-            val compileMs = (System.nanoTime() - compileStart) / 1_000_000
-
-            val coerceRowsStart = System.nanoTime()
-            val dataRows = if (request.safe) {
-                coerceRowsForTemplate(execution.allRows, jasperReport.mainDataset.fields)
-            } else {
-                execution.allRows
-            }
-            val coerceRowsMs = (System.nanoTime() - coerceRowsStart) / 1_000_000
-
-            val dataSource = JRMapCollectionDataSource(dataRows)
-            val coerceParamsStart = System.nanoTime()
-            val logoBytes = loadLogoBytes()
-            val jasperParams = mutableMapOf<String, Any?>(
-                "REPORT_NAME" to entity.name,
-                "REPORT_QUERY" to execution.query
-            ).apply {
-                if (request.safe) {
-                    putAll(coerceParamsForTemplate(request.params, jasperReport.parameters))
-                } else {
-                    putAll(request.params)
-                }
-                if (logoBytes != null) {
-                    put("LOGO_STREAM", ByteArrayInputStream(logoBytes))
-                    put("LOGO_URL", this@ReportService::class.java.classLoader.getResource(LOGO_RESOURCE_PATH)?.toExternalForm())
-                }
-            }
-            val coerceParamsMs = (System.nanoTime() - coerceParamsStart) / 1_000_000
-
-            val fillStart = System.nanoTime()
-            val jasperPrint = JasperFillManager.fillReport(jasperReport, jasperParams, dataSource)
-            val fillMs = (System.nanoTime() - fillStart) / 1_000_000
-
-            val exportStart = System.nanoTime()
-            val pdfBytes = JasperExportManager.exportReportToPdf(jasperPrint)
-            val exportMs = (System.nanoTime() - exportStart) / 1_000_000
-            val totalMs = (System.nanoTime() - totalStart) / 1_000_000
-
-            log.info(
-                "PDF benchmark reportId={} templateId={} safe={} rows={} cols={} sqlMs={} compileMs={} coerceRowsMs={} coerceParamsMs={} fillMs={} exportMs={} totalMs={}",
-                id,
-                jasperTemplate.id,
-                request.safe,
-                execution.allRows.size,
-                execution.columns.size,
-                execution.elapsedMs,
-                compileMs,
-                coerceRowsMs,
-                coerceParamsMs,
-                fillMs,
-                exportMs,
-                totalMs
-            )
-            return pdfBytes
-        } catch (ex: JRException) {
-            log.error(
-                "Falha ao gerar PDF Jasper reportId={} templateId={} templateName={} error={}",
-                id,
-                jasperTemplate.id,
-                jasperTemplate.name,
-                ex.message,
-                ex
-            )
-            throw ResponseStatusException(
-                HttpStatus.BAD_REQUEST,
-                "Falha ao gerar PDF Jasper: ${ex.message}",
-                ex
-            )
-        } catch (ex: IllegalArgumentException) {
-            log.warn(
-                "Validacao falhou na geracao de PDF reportId={} templateId={} motivo={}",
-                id,
-                jasperTemplate.id,
-                ex.message
-            )
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, ex.message ?: "Erro de validacao", ex)
-        }
+        return pdfService.generatePdf(id, entity, execution, request)
     }
 
-    fun validate(request: ReportValidationRequest, ctx: UpstreamContext): ReportValidationResponse {
-        val errors = mutableListOf<String>()
-        val queryTemplate = request.sql.trim()
-        val variables = try {
-            normalizeVariables(request.variables)
-        } catch (ex: IllegalArgumentException) {
-            errors += ex.message ?: "Configuracao de variaveis invalida"
-            emptyList()
-        }
-
-        if (queryTemplate.isBlank()) {
-            errors += "SQL nao pode ser vazia"
-            return ReportValidationResponse(valid = false, errors = errors, renderedQuery = null)
-        }
-
-        if (request.enforceReadOnly) {
-            validateReadOnlyQuery(queryTemplate)?.let { errors += it }
-        }
-
-        val placeholdersInQuery = extractPlaceholders(queryTemplate)
-        val variableKeys = variables.map { it.key }.toSet()
-        val unknownPlaceholders = placeholdersInQuery - variableKeys
-        if (unknownPlaceholders.isNotEmpty()) {
-            errors += "Placeholders sem variavel configurada: ${unknownPlaceholders.joinToString(", ")}"
-        }
-
-        variables.forEach { variable ->
-            if (!placeholdersInQuery.contains(variable.key)) return@forEach
-            if (!variable.multiple) return@forEach
-
-            val hasWrongInSyntax = Regex("\\bin\\s*\\(\\s*:${Regex.escape(variable.key)}\\s*\\)", RegexOption.IGNORE_CASE)
-                .containsMatchIn(queryTemplate)
-            if (hasWrongInSyntax) {
-                errors += "Variavel multipla '${variable.key}' deve usar 'IN :${variable.key}' (sem parenteses)"
-                return@forEach
-            }
-
-            val hasExpectedInSyntax = Regex("\\bin\\s*:${Regex.escape(variable.key)}\\b", RegexOption.IGNORE_CASE)
-                .containsMatchIn(queryTemplate)
-            if (!hasExpectedInSyntax) {
-                errors += "Variavel multipla '${variable.key}' deve ser usada com IN :${variable.key}"
-            }
-        }
-
-        val renderedQuery = runCatching {
-            buildQueryWithParams(queryTemplate, variables, request.params, request.enforceRequired)
-        }.getOrElse { ex ->
-            errors += ex.message ?: "Falha ao montar SQL"
-            null
-        }
-
-        if (errors.isNotEmpty() || renderedQuery == null) {
-            return ReportValidationResponse(valid = false, errors = errors, renderedQuery = renderedQuery)
-        }
-
-        if (request.validateSyntax) {
-            runCatching {
-                sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, "EXPLAIN $renderedQuery", asDict = true, withDescription = true)
-            }.onFailure { ex ->
-                errors += "Falha de sintaxe/execucao no banco: ${ex.message ?: "erro desconhecido"}"
-            }
-        }
-
-        return ReportValidationResponse(valid = errors.isEmpty(), errors = errors, renderedQuery = renderedQuery)
-    }
+    fun validate(request: ReportValidationRequest, ctx: UpstreamContext): ReportValidationResponse =
+        validationService.validate(request, ctx)
 
     fun connectionTest(request: ReportConnectionTestRequest): ReportConnectionTestResponse {
         val source = request.source.trim().lowercase()
@@ -502,17 +273,17 @@ class ReportService(
         val variable = entity.variables.firstOrNull { it.key.equals(variableKey, ignoreCase = true) }
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Variavel '$variableKey' nao encontrada")
         return try {
-            val optionsSql = normalizeOptionsSql(variable.optionsSql)
+            val optionsSql = variableService.normalizeOptionsSql(variable.optionsSql)
             val query = buildQueryWithParams(optionsSql, entity.variables, request.params, enforceRequired = false)
             val result = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, query, true, true)
-            val rows = extractOptionRows(result)
+            val rows = variableService.extractOptionRows(result)
 
             if (rows.isEmpty()) {
-                extractOptionColumnsFromDescription(result)?.let { validateOptionColumns(it) }
+                variableService.extractOptionColumnsFromDescription(result)?.let { variableService.validateOptionColumns(it) }
                 return emptyList()
             }
 
-            val columns = validateOptionColumns(rows.first().keys)
+            val columns = variableService.validateOptionColumns(rows.first().keys)
             val limit = (request.limit ?: defaultFilterOptionsLimit).coerceIn(1, properties.reports.maxRows)
 
             rows.take(limit).map { row ->
@@ -524,73 +295,6 @@ class ReportService(
         } catch (ex: IllegalArgumentException) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, ex.message ?: "Erro de validacao", ex)
         }
-    }
-
-    private fun computeSummaries(columns: List<String>, rows: List<Map<String, Any?>>): List<ReportSummary> =
-        columns.mapNotNull { column ->
-            var sum = 0.0
-            var hasValue = false
-            var valid = true
-            for (row in rows) {
-                val value = row[column] ?: continue
-                when (value) {
-                    is Number -> {
-                        sum += value.toDouble()
-                        hasValue = true
-                    }
-                    else -> {
-                        valid = false
-                        break
-                    }
-                }
-            }
-            if (valid && hasValue) ReportSummary(column = column, sum = sum) else null
-        }
-
-    private fun ReportEntity.toResponse(): ReportResponse {
-        val created = createdAt ?: error("createdAt ausente")
-        val updated = updatedAt ?: error("updatedAt ausente")
-        return ReportResponse(
-            id = id?.toString() ?: error("id ausente"),
-            name = name,
-            templateName = templateName,
-            sql = sql,
-            description = description,
-            archived = archived,
-            folder = folder?.let { reportFolder ->
-                ReportFolderSummaryResponse(
-                    id = reportFolder.id?.toString() ?: error("id da pasta ausente"),
-                    name = reportFolder.name,
-                    archived = reportFolder.archived
-                )
-            },
-            jasperTemplate = jasperTemplate?.let { template ->
-                JasperTemplateSummaryResponse(
-                    id = template.id?.toString() ?: error("id do template Jasper ausente"),
-                    name = template.name,
-                    archived = template.archived
-                )
-            },
-            variables = variables
-                .sortedBy { it.orderIndex }
-                .map { variable ->
-                    ReportVariableResponse(
-                        id = variable.id?.toString() ?: error("id da variavel ausente"),
-                        key = variable.key,
-                        label = variable.label,
-                        type = variable.type,
-                        required = variable.required,
-                        multiple = variable.multiple,
-                        defaultValue = variable.defaultValue,
-                        optionsSql = variable.optionsSql,
-                        orderIndex = variable.orderIndex
-                    )
-                },
-            createdAt = created.toEpochMilli(),
-            updatedAt = updated.toEpochMilli(),
-            secondSql = secondSql,
-            comparisonKey = comparisonKey
-        )
     }
 
     private fun resolveFolder(folderId: UUID?): ReportFolderEntity? {
@@ -611,29 +315,7 @@ class ReportService(
         entity: ReportEntity,
         ctx: UpstreamContext,
         params: Map<String, Any?>
-    ): ExecutionResult {
-        val queryTemplate = entity.sql.trim()
-        require(queryTemplate.isNotBlank()) { "SQL nao pode ser vazia" }
-        ReadOnlySqlValidator.requireReadOnly(queryTemplate)
-        val query = buildQueryWithParams(queryTemplate, entity.variables, params)
-
-        val start = System.nanoTime()
-        val result = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, query, true, true)
-        val elapsedMs = (System.nanoTime() - start) / 1_000_000
-
-        val tabular = EmailReportFormatter.toTabular(result)
-        val columns = tabular?.columns ?: emptyList()
-        val allRows = tabular?.rows?.map { row ->
-            columns.zip(row).associate { (column, value) -> column to value }
-        } ?: emptyList()
-
-        return ExecutionResult(
-            query = query,
-            columns = columns,
-            allRows = allRows,
-            elapsedMs = elapsedMs
-        )
-    }
+    ): ExecutionResult = executionService.executeReport(entity, ctx, params)
 
     private fun executeReportPage(
         entity: ReportEntity,
@@ -641,709 +323,16 @@ class ReportService(
         params: Map<String, Any?>,
         page: Int,
         size: Int
-    ): PaginatedExecutionResult {
-        val queryTemplate = entity.sql.trim()
-        require(queryTemplate.isNotBlank()) { "SQL nao pode ser vazia" }
-        ReadOnlySqlValidator.requireReadOnly(queryTemplate)
-        val query = buildQueryWithParams(queryTemplate, entity.variables, params)
-        val paginatedQuery = toPaginatedSelect(query, size, page * size)
-        val countQuery = toCountSelect(query)
-
-        val start = System.nanoTime()
-        val pageResult = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, paginatedQuery, true, true)
-        val totalRows = fetchTotalRows(ctx, countQuery)
-        val elapsedMs = (System.nanoTime() - start) / 1_000_000
-
-        val tabular = EmailReportFormatter.toTabular(pageResult)
-        val columns = tabular?.columns ?: emptyList()
-        val rows = tabular?.rows?.map { row ->
-            columns.zip(row).associate { (column, value) -> column to value }
-        } ?: emptyList()
-
-        return PaginatedExecutionResult(
-            query = paginatedQuery,
-            columns = columns,
-            rows = rows,
-            rowCount = totalRows,
-            elapsedMs = elapsedMs
-        )
-    }
-
-    private fun fetchTotalRows(ctx: UpstreamContext, countQuery: String): Int {
-        val result = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, countQuery, true, true)
-        val tabular = EmailReportFormatter.toTabular(result)
-        val firstValue = tabular?.rows?.firstOrNull()?.firstOrNull()
-            ?: throw IllegalStateException("Resposta de count sem dados")
-
-        return when (firstValue) {
-            is Int -> firstValue
-            is Long -> firstValue.toInt()
-            is Short -> firstValue.toInt()
-            is Byte -> firstValue.toInt()
-            is BigInteger -> firstValue.toInt()
-            is BigDecimal -> firstValue.toInt()
-            is Number -> firstValue.toInt()
-            is String -> firstValue.trim().toIntOrNull()
-                ?: throw IllegalStateException("Valor de count invalido: '$firstValue'")
-            else -> throw IllegalStateException("Tipo de count invalido: ${firstValue::class.java.name}")
-        }
-    }
-
-    private fun toPaginatedSelect(rawQuery: String, limit: Int, offset: Int): String {
-        val query = rawQuery.trim().trimEnd(';').trim()
-        require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
-        val startsLikeReadOnly = query.startsWith("select", ignoreCase = true) ||
-            query.startsWith("with", ignoreCase = true)
-        require(startsLikeReadOnly) { "Paginacao disponivel apenas para SELECT/WITH" }
-        return "SELECT * FROM ($query) dbi_paginated LIMIT $limit OFFSET $offset"
-    }
-
-    private fun toCountSelect(rawQuery: String): String {
-        val query = rawQuery.trim().trimEnd(';').trim()
-        require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
-        val startsLikeReadOnly = query.startsWith("select", ignoreCase = true) ||
-            query.startsWith("with", ignoreCase = true)
-        require(startsLikeReadOnly) { "Paginacao disponivel apenas para SELECT/WITH" }
-        return "SELECT COUNT(*) AS dbi_total_rows FROM ($query) dbi_counted"
-    }
+    ): PaginatedExecutionResult = executionService.executeReportPage(entity, ctx, params, page, size)
 
     private fun buildQueryWithParams(
         queryTemplate: String,
         variables: List<ReportVariableEntity>,
         params: Map<String, Any?>,
         enforceRequired: Boolean = true
-    ): String {
-        if (variables.isEmpty()) return queryTemplate
+    ): String = queryService.buildQueryWithParams(queryTemplate, variables, params, enforceRequired)
 
-        val knownKeys = variables.map { it.key }.toSet()
-        val unknown = params.keys.filterNot { knownKeys.contains(it) }
-        require(unknown.isEmpty()) { "Parametros desconhecidos: ${unknown.joinToString(", ")}" }
+    private fun compareFieldValue(v1: Any?, v2: Any?, tolerance: BigDecimal?): FieldComparison =
+        comparisonService.compareField(v1, v2, tolerance)
 
-        var rendered = queryTemplate
-        variables.forEach { variable ->
-            val rawValue = resolveVariableValue(variable, params, enforceRequired)
-            val sqlLiteral = toSqlLiteral(variable, rawValue)
-            val placeholder = Regex("(?<!:):${Regex.escape(variable.key)}\\b")
-            rendered = rendered.replace(placeholder, sqlLiteral)
-        }
-        return rendered
-    }
-
-    private fun extractPlaceholders(query: String): Set<String> =
-        placeholderRegex.findAll(query).map { it.groupValues[1] }.toSet()
-
-    private fun validateReadOnlyQuery(queryTemplate: String): String? {
-        return ReadOnlySqlValidator.validate(queryTemplate)
-    }
-
-    private fun extractPrimaryColumns(entity: ReportEntity, ctx: UpstreamContext, includeTypes: Boolean): List<ReportColumnMeta> {
-        val queryTemplate = entity.sql.trim()
-        if (queryTemplate.isBlank()) {
-            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL primaria invalida para extracao de metadados")
-        }
-        val renderedQuery = buildQueryWithParams(queryTemplate, entity.variables, emptyMap(), enforceRequired = false)
-        val metadataQuery = "SELECT * FROM (${renderedQuery.trim().trimEnd(';')}) dbi_primary_meta WHERE 1 = 0"
-        return try {
-            val result = sqlExecClient.exec(ctx.endpointUrl, ctx.bearer, metadataQuery, true, true)
-            val description = result["description"] as? List<*>
-            val columns = description?.mapNotNull { raw ->
-                val column = raw as? Map<*, *> ?: return@mapNotNull null
-                val name = (column["name"] ?: column["column_name"] ?: column["columnName"] ?: column["field"])?.toString()
-                    ?: return@mapNotNull null
-                val rawType = (column["type"] ?: column["data_type"] ?: column["type_name"])?.toString()
-                ReportColumnMeta(
-                    name = name,
-                    type = if (includeTypes) normalizeColumnType(rawType) else null
-                )
-            }.orEmpty()
-            columns.distinctBy { it.name }
-        } catch (_: IllegalArgumentException) {
-            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL primaria invalida para extracao de metadados")
-        } catch (ex: Exception) {
-            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Falha ao extrair metadados da origem primaria")
-        }
-    }
-
-    private fun extractSecondaryColumns(entity: ReportEntity, secondSql: String, includeTypes: Boolean): List<ReportColumnMeta> {
-        val renderedQuery = buildQueryWithParams(secondSql, entity.variables, emptyMap(), enforceRequired = false)
-        return try {
-            hanaQueryService.extractColumns(renderedQuery, COLUMNS_QUERY_TIMEOUT_SECONDS).map {
-                ReportColumnMeta(
-                    name = it.name,
-                    type = if (includeTypes) it.type else null
-                )
-            }
-        } catch (ex: ResponseStatusException) {
-            if (ex.statusCode == HttpStatus.SERVICE_UNAVAILABLE) {
-                throw ex
-            }
-            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL secundaria invalida para extracao de metadados")
-        } catch (_: IllegalArgumentException) {
-            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL secundaria invalida para extracao de metadados")
-        }
-    }
-
-    private fun normalizeColumnsSource(source: String): String {
-        val value = source.trim().lowercase()
-        if (value !in setOf("primary", "secondary", "both")) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Parametro 'source' invalido")
-        }
-        return value
-    }
-
-    private fun columnsCacheKey(entity: ReportEntity, source: String, includeTypes: Boolean): String {
-        val sqlHash = sha256Hex("${entity.sql}|${entity.secondSql.orEmpty()}")
-        return "${entity.id}:$source:$includeTypes:$sqlHash"
-    }
-
-    private fun sha256Hex(value: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(value.toByteArray(StandardCharsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-
-    private fun normalizeColumnType(rawType: String?): String {
-        val value = rawType?.trim()?.uppercase().orEmpty()
-        return when {
-            value.isBlank() -> "unknown"
-            value.contains("BOOL") || value == "BIT" -> "boolean"
-            value.contains("TIMESTAMP") || value.contains("TIME") -> "datetime"
-            value.contains("DATE") -> "date"
-            value.contains("INT") || value.contains("DEC") || value.contains("NUM") || value.contains("FLOAT") || value.contains("DOUBLE") -> "number"
-            else -> "string"
-        }
-    }
-
-    private fun resolveVariableValue(
-        variable: ReportVariableEntity,
-        params: Map<String, Any?>,
-        enforceRequired: Boolean
-    ): Any? {
-        if (params.containsKey(variable.key)) {
-            return params[variable.key]
-        }
-        if (!variable.defaultValue.isNullOrBlank()) {
-            return variable.defaultValue
-        }
-        if (variable.required && enforceRequired) {
-            throw IllegalArgumentException("Parametro obrigatorio ausente: '${variable.key}'")
-        }
-        return null
-    }
-
-    private fun normalizeOptionsSql(optionsSql: String?): String {
-        val query = optionsSql?.trim().orEmpty()
-        if (query.isBlank()) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Variavel sem SQL de opcoes configurado")
-        }
-
-        val withoutTrailingSemicolon = query.removeSuffix(";").trim()
-        require(withoutTrailingSemicolon.isNotBlank()) { "SQL de opcoes nao pode ser vazio" }
-        require(!withoutTrailingSemicolon.contains(";")) { "SQL de opcoes deve conter apenas uma consulta" }
-        val startsLikeSelect = withoutTrailingSemicolon.startsWith("select", ignoreCase = true) ||
-            withoutTrailingSemicolon.startsWith("with", ignoreCase = true)
-        require(startsLikeSelect) { "SQL de opcoes deve comecar com SELECT ou WITH" }
-        require(
-            !writeKeywordsRegex.containsMatchIn(withoutTrailingSemicolon)
-        ) { "SQL de opcoes deve ser somente leitura" }
-
-        return withoutTrailingSemicolon
-    }
-
-    private fun extractOptionRows(result: Map<String, Any?>): List<Map<String, Any?>> {
-        val data = result["data"] as? List<*> ?: return emptyList()
-        if (data.isEmpty()) return emptyList()
-        return data.mapIndexed { index, raw ->
-            val map = raw as? Map<*, *> ?: throw IllegalArgumentException(
-                "Linha ${index + 1} do SQL de opcoes nao esta no formato objeto"
-            )
-            map.entries
-                .filter { it.key is String }
-                .associate { (key, value) -> key as String to value }
-        }
-    }
-
-    private fun extractOptionColumnsFromDescription(result: Map<String, Any?>): Set<String>? {
-        val description = result["description"] as? List<*> ?: return null
-        val keys = description.mapNotNull { raw ->
-            val column = raw as? Map<*, *> ?: return@mapNotNull null
-            val name = column["name"] ?: column["column_name"] ?: column["columnName"] ?: column["field"]
-            name?.toString()
-        }.toSet()
-        return keys.takeIf { it.isNotEmpty() }
-    }
-
-    private fun validateOptionColumns(columns: Collection<String>): OptionColumns {
-        require(columns.size == 2) {
-            "SQL de opcoes deve retornar exatamente 2 colunas: valor e descricao"
-        }
-
-        val valorKey = columns.firstOrNull { it.equals(optionColumnValor, ignoreCase = true) }
-        val descricaoKey = columns.firstOrNull { it.equals(optionColumnDescricao, ignoreCase = true) }
-        require(valorKey != null && descricaoKey != null) {
-            "SQL de opcoes deve retornar as colunas 'valor' e 'descricao'"
-        }
-
-        return OptionColumns(valor = valorKey, descricao = descricaoKey)
-    }
-
-    private fun toSqlLiteral(variable: ReportVariableEntity, rawValue: Any?): String {
-        if (!variable.multiple) {
-            if (rawValue == null) return "NULL"
-            return toSingleSqlLiteral(variable, rawValue)
-        }
-
-        if (rawValue == null) return "(NULL)"
-
-        val items = when (rawValue) {
-            is Collection<*> -> rawValue.toList()
-            is Array<*> -> rawValue.toList()
-            else -> listOf(rawValue)
-        }
-        require(items.isNotEmpty()) { "Parametro '${variable.key}' nao pode ser lista vazia" }
-
-        val sqlItems = items.map { item ->
-            require(item != null) { "Parametro '${variable.key}' nao pode conter valores nulos" }
-            toSingleSqlLiteral(variable, item)
-        }
-        return sqlItems.joinToString(prefix = "(", postfix = ")")
-    }
-
-    private fun toSingleSqlLiteral(variable: ReportVariableEntity, rawValue: Any): String {
-        return when (variable.type) {
-            "string" -> "'${escapeSqlString(rawValue.toString())}'"
-            "number" -> parseNumber(variable.key, rawValue).toPlainString()
-            "date" -> "'${parseDate(variable.key, rawValue)}'"
-            "datetime" -> "'${parseDateTime(variable.key, rawValue)}'"
-            "boolean" -> parseBoolean(variable.key, rawValue).toString()
-            else -> throw IllegalArgumentException("Tipo de variavel invalido: '${variable.type}'")
-        }
-    }
-
-    private fun parseNumber(key: String, rawValue: Any): BigDecimal =
-        when (rawValue) {
-            is Number -> BigDecimal(rawValue.toString())
-            is String -> rawValue.trim().let {
-                runCatching { BigDecimal(it) }.getOrElse {
-                    throw IllegalArgumentException("Parametro '$key' deve ser number")
-                }
-            }
-            else -> throw IllegalArgumentException("Parametro '$key' deve ser number")
-        }
-
-    private fun parseDate(key: String, rawValue: Any): String {
-        val text = rawValue.toString().trim()
-        return try {
-            LocalDate.parse(text).toString()
-        } catch (_: DateTimeParseException) {
-            throw IllegalArgumentException("Parametro '$key' deve ser date (yyyy-MM-dd)")
-        }
-    }
-
-    private fun parseDateTime(key: String, rawValue: Any): String {
-        val text = rawValue.toString().trim()
-        val value = runCatching { LocalDateTime.parse(text) }.getOrNull()
-            ?: runCatching { OffsetDateTime.parse(text).toLocalDateTime() }.getOrNull()
-            ?: runCatching { ZonedDateTime.parse(text).toLocalDateTime() }.getOrNull()
-            ?: throw IllegalArgumentException("Parametro '$key' deve ser datetime (ISO-8601)")
-
-        return value.format(dateTimeSqlFormatter)
-    }
-
-    private fun parseBoolean(key: String, rawValue: Any): Boolean =
-        when (rawValue) {
-            is Boolean -> rawValue
-            is String -> when (rawValue.trim().lowercase()) {
-                "true", "1", "yes", "y", "sim", "s" -> true
-                "false", "0", "no", "n", "nao", "não" -> false
-                else -> throw IllegalArgumentException("Parametro '$key' deve ser boolean")
-            }
-            else -> throw IllegalArgumentException("Parametro '$key' deve ser boolean")
-        }
-
-    private fun escapeSqlString(value: String): String = value.replace("'", "''")
-
-    private fun sanitizeJrxml(raw: String): String {
-        var result = raw
-
-        // Remove uuid only from jasperReport root tag, where some generated variants are incompatible.
-        result = result.replace(
-            Regex("""(<\s*jasperReport\b[^>]*?)\s+uuid\s*=\s*"[^"]*"([^>]*>)""", RegexOption.IGNORE_CASE)
-        ) { match ->
-            "${match.groupValues[1]}${match.groupValues[2]}"
-        }
-
-        // Jasper 7 expects <query>, so normalize any legacy <queryString> to <query language="sql">.
-        result = result.replace(
-            Regex("""<\s*queryString\b[^>]*>(.*?)<\s*/\s*queryString\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        ) { match ->
-            "<query language=\"sql\">${match.groupValues[1]}</query>"
-        }
-
-        // Reports are filled from JRMapCollectionDataSource; disable json query executer usage.
-        result = result.replace(
-            Regex("""<\s*query\b[^>]*language\s*=\s*"json"[^>]*>.*?<\s*/\s*query\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        ) {
-            "<query language=\"sql\"><![CDATA[]]></query>"
-        }
-
-        return result
-    }
-
-    private fun configureJasperCompiler() {
-        val context = DefaultJasperReportsContext.getInstance()
-        val properties = JRPropertiesUtil.getInstance(context)
-        properties.setProperty("net.sf.jasperreports.compiler.class", JASPER_JDT_COMPILER)
-        properties.setProperty("net.sf.jasperreports.compiler.java", JASPER_JDT_COMPILER)
-        properties.setProperty("net.sf.jasperreports.default.font.name", "DejaVu Sans")
-        properties.setProperty("net.sf.jasperreports.default.pdf.font.name", "DejaVu Sans")
-        properties.setProperty("net.sf.jasperreports.default.pdf.encoding", "Identity-H")
-        properties.setProperty("net.sf.jasperreports.default.pdf.embedded", "true")
-    }
-
-    private fun loadLogoBytes(): ByteArray? {
-        val stream = this::class.java.classLoader.getResourceAsStream(LOGO_RESOURCE_PATH)
-        if (stream == null) {
-            log.warn("Logo fixa nao encontrada em classpath: {}", LOGO_RESOURCE_PATH)
-            return null
-        }
-        return stream.use { it.readBytes() }
-    }
-
-    private fun coerceRowsForTemplate(
-        rows: List<Map<String, Any?>>,
-        fields: Array<JRField>
-    ): List<Map<String, Any?>> {
-        val expectedTypesByField = fields.associate { it.name to it.valueClassName }
-        return rows.map { row ->
-            row.mapValues { (key, value) ->
-                coerceForExpectedType(value, expectedTypesByField[key], "field '$key'")
-            }
-        }
-    }
-
-    private fun coerceParamsForTemplate(
-        params: Map<String, Any?>,
-        reportParameters: Array<JRParameter>
-    ): Map<String, Any?> {
-        val expectedTypesByParam = reportParameters
-            .filterNot { it.isSystemDefined }
-            .associate { it.name to it.valueClassName }
-        return params.mapValues { (key, value) ->
-            coerceForExpectedType(value, expectedTypesByParam[key], "param '$key'")
-        }
-    }
-
-    private fun coerceForExpectedType(value: Any?, expectedClassName: String?, label: String): Any? {
-        if (value == null || expectedClassName.isNullOrBlank()) return value
-
-        return runCatching {
-            when (expectedClassName) {
-                "java.lang.String" -> value.toString()
-                "java.lang.Long", "long" -> toBigDecimal(value).toLong()
-                "java.lang.Integer", "int" -> toBigDecimal(value).toInt()
-                "java.lang.Short", "short" -> toBigDecimal(value).toShort()
-                "java.lang.Byte", "byte" -> toBigDecimal(value).toByte()
-                "java.lang.Double", "double" -> toBigDecimal(value).toDouble()
-                "java.lang.Float", "float" -> toBigDecimal(value).toFloat()
-                "java.math.BigDecimal" -> toBigDecimal(value)
-                "java.math.BigInteger" -> toBigInteger(value)
-                "java.lang.Boolean", "boolean" -> toBooleanValue(value)
-                "java.util.Date" -> toDateValue(value)
-                else -> value
-            }
-        }.getOrElse { ex ->
-            log.warn(
-                "Safe mode: nao foi possivel converter {} para {} (valor='{}'). Usando null. motivo={}",
-                label,
-                expectedClassName,
-                value,
-                ex.message
-            )
-            null
-        }
-    }
-
-    private fun toBigDecimal(value: Any): BigDecimal =
-        when (value) {
-            is BigDecimal -> value
-            is BigInteger -> BigDecimal(value)
-            is Number -> BigDecimal(value.toString())
-            is String -> value.trim().let { BigDecimal(it) }
-            else -> throw IllegalArgumentException("valor nao numerico")
-        }
-
-    private fun toBigInteger(value: Any): BigInteger =
-        when (value) {
-            is BigInteger -> value
-            is BigDecimal -> value.toBigInteger()
-            is Number -> BigInteger(value.toString())
-            is String -> value.trim().let { BigInteger(it) }
-            else -> throw IllegalArgumentException("valor nao inteiro")
-        }
-
-    private fun toBooleanValue(value: Any): Boolean =
-        when (value) {
-            is Boolean -> value
-            is Number -> value.toInt() != 0
-            is String -> when (value.trim().lowercase()) {
-                "true", "1", "yes", "y", "sim", "s" -> true
-                "false", "0", "no", "n", "nao", "não" -> false
-                else -> throw IllegalArgumentException("valor boolean invalido")
-            }
-            else -> throw IllegalArgumentException("valor boolean invalido")
-        }
-
-    private fun toDateValue(value: Any): Date =
-        when (value) {
-            is Date -> value
-            is LocalDate -> Date.from(value.atStartOfDay(ZoneId.systemDefault()).toInstant())
-            is LocalDateTime -> Date.from(value.atZone(ZoneId.systemDefault()).toInstant())
-            is OffsetDateTime -> Date.from(value.toInstant())
-            is ZonedDateTime -> Date.from(value.toInstant())
-            is String -> {
-                val text = value.trim()
-                runCatching { Date.from(OffsetDateTime.parse(text).toInstant()) }.getOrNull()
-                    ?: runCatching { Date.from(ZonedDateTime.parse(text).toInstant()) }.getOrNull()
-                    ?: runCatching {
-                        Date.from(LocalDateTime.parse(text).atZone(ZoneId.systemDefault()).toInstant())
-                    }.getOrNull()
-                    ?: runCatching {
-                        Date.from(LocalDate.parse(text).atStartOfDay(ZoneId.systemDefault()).toInstant())
-                    }.getOrNull()
-                    ?: throw IllegalArgumentException("valor date invalido")
-            }
-            else -> throw IllegalArgumentException("valor date invalido")
-        }
-
-    private data class ExecutionResult(
-        val query: String,
-        val columns: List<String>,
-        val allRows: List<Map<String, Any?>>, 
-        val elapsedMs: Long
-    )
-
-    private data class CachedColumns(
-        val response: ReportColumnsResponse,
-        val expiresAt: Instant
-    )
-
-    private data class PaginatedExecutionResult(
-        val query: String,
-        val columns: List<String>,
-        val rows: List<Map<String, Any?>>,
-        val rowCount: Int,
-        val elapsedMs: Long
-    )
-
-    private fun normalizeVariables(input: List<ReportVariableRequest>): List<ReportVariableEntity> {
-        val seenKeys = mutableSetOf<String>()
-        return input.mapIndexed { index, variable ->
-            val key = variable.key.trim()
-            val label = variable.label.trim()
-            val type = variable.type.trim().lowercase()
-            require(type in allowedVariableTypes) {
-                "Tipo de variavel invalido: '$type'. Use string, number, date, datetime ou boolean"
-            }
-            require(seenKeys.add(key.lowercase())) { "Variavel duplicada: '$key'" }
-
-            ReportVariableEntity(
-                key = key,
-                label = label,
-                type = type,
-                required = variable.required,
-                multiple = variable.multiple,
-                defaultValue = variable.defaultValue?.trim().takeUnless { it.isNullOrBlank() },
-                optionsSql = variable.optionsSql?.trim().takeUnless { it.isNullOrBlank() },
-                orderIndex = variable.orderIndex ?: index
-            )
-        }
-    }
-
-    private fun buildKeyedComparisonDiff(
-        source1: ComparisonSource,
-        source2: ComparisonSource,
-        comparisonKey: String,
-        commonColumns: Set<String>,
-        toleranceByField: Map<String, BigDecimal>
-    ): ComparisonDiff {
-        val rows1ByKey = source1.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
-        val rows2ByKey = source2.rows.groupBy { normalizeComparisonKeyValue(it[comparisonKey]) }
-        val duplicateKeysSource1 = rows1ByKey
-            .filter { it.value.size > 1 }
-            .mapKeys { it.key ?: "<null>" }
-            .mapValues { it.value.size }
-        val duplicateKeysSource2 = rows2ByKey
-            .filter { it.value.size > 1 }
-            .mapKeys { it.key ?: "<null>" }
-            .mapValues { it.value.size }
-        val allKeys = (rows1ByKey.keys + rows2ByKey.keys).distinct().sortedWith(compareBy(nullsFirst<String>()) { it })
-
-        val onlyInSource1 = mutableListOf<Map<String, Any?>>()
-        val onlyInSource2 = mutableListOf<Map<String, Any?>>()
-        val withDifferences = mutableListOf<MatchedRecord>()
-        var matchCount = 0
-        var equalCount = 0
-        var differentCount = 0
-
-        allKeys.forEach { keyValue ->
-            val list1 = (rows1ByKey[keyValue] ?: emptyList()).sortedBy { rowFingerprint(it, commonColumns) }
-            val list2 = (rows2ByKey[keyValue] ?: emptyList()).sortedBy { rowFingerprint(it, commonColumns) }
-            val matched = minOf(list1.size, list2.size)
-            matchCount += matched
-
-            for (i in 0 until matched) {
-                val row1 = list1[i]
-                val row2 = list2[i]
-                val fields = commonColumns.associateWith { col ->
-                    compareFieldValue(row1[col], row2[col], toleranceByField[col.lowercase()])
-                }
-                if (fields.values.all { it.equal }) {
-                    equalCount++
-                } else {
-                    differentCount++
-                    withDifferences += MatchedRecord(key = keyValue, fields = fields)
-                }
-            }
-
-            if (list1.size > matched) onlyInSource1 += list1.drop(matched)
-            if (list2.size > matched) onlyInSource2 += list2.drop(matched)
-        }
-
-        return ComparisonDiff(
-            onlyInSource1 = onlyInSource1,
-            onlyInSource2 = onlyInSource2,
-            matchCount = matchCount,
-            equalCount = equalCount,
-            differentCount = differentCount,
-            withDifferences = withDifferences,
-            duplicateKeysSource1 = duplicateKeysSource1,
-            duplicateKeysSource2 = duplicateKeysSource2,
-            mode = "keyed"
-        )
-    }
-
-    private fun buildContentComparisonDiff(
-        source1: ComparisonSource,
-        source2: ComparisonSource,
-        commonColumns: Set<String>,
-        toleranceByField: Map<String, BigDecimal>
-    ): ComparisonDiff {
-        if (toleranceByField.isEmpty()) {
-            val rows1ByContent = source1.rows.groupBy { rowFingerprint(it, commonColumns) }
-            val rows2ByContent = source2.rows.groupBy { rowFingerprint(it, commonColumns) }
-            val allFingerprints = (rows1ByContent.keys + rows2ByContent.keys).distinct()
-
-            val onlyInSource1 = mutableListOf<Map<String, Any?>>()
-            val onlyInSource2 = mutableListOf<Map<String, Any?>>()
-            var matchCount = 0
-
-            allFingerprints.forEach { fp ->
-                val list1 = rows1ByContent[fp] ?: emptyList()
-                val list2 = rows2ByContent[fp] ?: emptyList()
-                val matched = minOf(list1.size, list2.size)
-                matchCount += matched
-                if (list1.size > matched) onlyInSource1 += list1.drop(matched)
-                if (list2.size > matched) onlyInSource2 += list2.drop(matched)
-            }
-
-            return ComparisonDiff(
-                onlyInSource1 = onlyInSource1,
-                onlyInSource2 = onlyInSource2,
-                matchCount = matchCount,
-                equalCount = matchCount,
-                differentCount = 0,
-                withDifferences = emptyList(),
-                mode = "content"
-            )
-        }
-
-        val remainingSource2 = source2.rows.toMutableList()
-        val onlyInSource1 = mutableListOf<Map<String, Any?>>()
-        var matchCount = 0
-
-        source1.rows.forEach { row1 ->
-            val idx = remainingSource2.indexOfFirst { row2 -> rowsEqualWithTolerance(row1, row2, commonColumns, toleranceByField) }
-            if (idx >= 0) {
-                matchCount++
-                remainingSource2.removeAt(idx)
-            } else {
-                onlyInSource1 += row1
-            }
-        }
-
-        return ComparisonDiff(
-            onlyInSource1 = onlyInSource1,
-            onlyInSource2 = remainingSource2,
-            matchCount = matchCount,
-            equalCount = matchCount,
-            differentCount = 0,
-            withDifferences = emptyList(),
-            mode = "content"
-        )
-    }
-
-    private fun normalizeComparisonKeyValue(value: Any?): String? {
-        val normalized = value?.toString()?.trim()?.takeIf { it.isNotEmpty() }
-        return normalized?.lowercase()
-    }
-
-    private fun rowFingerprint(row: Map<String, Any?>, columns: Set<String>): String =
-        columns.sorted().joinToString("|") { col ->
-            "$col=${normalizeFingerprintValue(row[col])}"
-        }
-
-    private fun normalizeFingerprintValue(value: Any?): String {
-        if (value == null) return "__NULL__"
-        val bd = runCatching { toBigDecimal(value) }.getOrNull()
-        if (bd != null) return bd.stripTrailingZeros().toPlainString()
-        return value.toString().trim().lowercase()
-    }
-
-    private fun compareFieldValue(v1: Any?, v2: Any?, tolerance: BigDecimal? = null): FieldComparison {
-        if (v1 == null && v2 == null) return FieldComparison(source1 = null, source2 = null, equal = true, diff = null)
-        if (v1 == null || v2 == null) return FieldComparison(source1 = v1, source2 = v2, equal = false, diff = null)
-
-        val bd1 = runCatching { toBigDecimal(v1) }.getOrNull()
-        val bd2 = runCatching { toBigDecimal(v2) }.getOrNull()
-
-        if (bd1 != null && bd2 != null) {
-            val delta = (bd1 - bd2).abs()
-            val equal = tolerance?.let { delta <= it } ?: (bd1.compareTo(bd2) == 0)
-            val diff = if (equal) null else (bd1 - bd2).toDouble()
-            return FieldComparison(source1 = v1, source2 = v2, equal = equal, diff = diff)
-        }
-
-        if (bd1 != null || bd2 != null) {
-            return FieldComparison(source1 = v1, source2 = v2, equal = false, diff = null)
-        }
-
-        val equal = v1.toString().trim() == v2.toString().trim()
-        return FieldComparison(source1 = v1, source2 = v2, equal = equal, diff = null)
-    }
-
-
-    private fun normalizeComparisonTolerances(raw: Map<String, Double>): Map<String, BigDecimal> =
-        raw.entries.associate { (field, tolerance) ->
-            val key = field.trim().lowercase()
-            require(key.isNotBlank()) { "Nome de campo de tolerancia nao pode ser vazio" }
-            require(!tolerance.isNaN() && !tolerance.isInfinite() && tolerance >= 0.0) {
-                "Tolerancia invalida para '$field': $tolerance"
-            }
-            key to BigDecimal.valueOf(tolerance)
-        }
-
-    private fun rowsEqualWithTolerance(
-        row1: Map<String, Any?>,
-        row2: Map<String, Any?>,
-        commonColumns: Set<String>,
-        toleranceByField: Map<String, BigDecimal>
-    ): Boolean =
-        commonColumns.all { col ->
-            compareFieldValue(row1[col], row2[col], toleranceByField[col.lowercase()]).equal
-        }
-
-    private data class OptionColumns(
-        val valor: String,
-        val descricao: String
-    )
 }

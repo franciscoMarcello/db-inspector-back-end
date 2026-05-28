@@ -19,6 +19,7 @@ class AdminUserServiceTest {
         val rolePermissionRepository = Mockito.mock(RolePermissionRepository::class.java)
         val refreshTokenRepository = Mockito.mock(RefreshTokenRepository::class.java)
         val auditService = Mockito.mock(AdminAuditService::class.java)
+        val roleManagementService = Mockito.mock(AdminRoleManagementService::class.java)
 
         val service = AdminUserService(
             userRepository = userRepository,
@@ -28,6 +29,7 @@ class AdminUserServiceTest {
             rolePermissionRepository = rolePermissionRepository,
             refreshTokenRepository = refreshTokenRepository,
             auditService = auditService,
+            roleManagementService = roleManagementService,
             passwordEncoder = BCryptPasswordEncoder()
         )
 
@@ -69,6 +71,7 @@ class AdminUserServiceTest {
         val rolePermissionRepository = Mockito.mock(RolePermissionRepository::class.java)
         val refreshTokenRepository = Mockito.mock(RefreshTokenRepository::class.java)
         val auditService = Mockito.mock(AdminAuditService::class.java)
+        val roleManagementService = Mockito.mock(AdminRoleManagementService::class.java)
         val passwordEncoder = BCryptPasswordEncoder()
 
         val service = AdminUserService(
@@ -79,6 +82,7 @@ class AdminUserServiceTest {
             rolePermissionRepository = rolePermissionRepository,
             refreshTokenRepository = refreshTokenRepository,
             auditService = auditService,
+            roleManagementService = roleManagementService,
             passwordEncoder = passwordEncoder
         )
 
