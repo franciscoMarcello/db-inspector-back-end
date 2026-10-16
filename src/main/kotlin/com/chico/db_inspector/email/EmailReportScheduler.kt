@@ -52,6 +52,7 @@ class EmailReportScheduler(
 
         val extraAttachments = mutableListOf<EmailAttachment>()
         var payloadForEmail = result
+        var comparisonDetail: ComparisonEmailDetail? = null
 
         if (body.attachPdf == true) {
             val pdfMode = normalizePdfMode(body.pdfMode)
@@ -82,19 +83,29 @@ class EmailReportScheduler(
             val comparison = comparisonService.compareRows(
                 sourceRows = sourceRows,
                 source2Rows = hanaResult.rows,
-                comparisonKey = body.comparisonKey,
-                tolerances = body.comparisonTolerances
+                options = comparisonOptions(body)
             )
             val sendOnlyIfDifferent = body.sendOnlyIfDifferent ?: true
             if (sendOnlyIfDifferent && !comparison.hasDifference) {
                 return EmailSendResult(previewRows = 0, attachedXlsx = false, sent = false)
             }
 
+            comparisonDetail = comparisonService.buildDetail(
+                differences = comparison.differences,
+                source1Label = "agromobi",
+                source2Label = "sap",
+                groupByColumn = body.comparisonGroupBy,
+                valueColumn = body.comparisonValueColumn,
+                topN = body.comparisonTopN ?: 0
+            )
+
             val comparisonWorkbook = EmailReportFormatter.buildComparisonWorkbook(
                 source1Label = "agromobi",
                 source1Rows = sourceRows,
                 source2Label = "sap",
                 source2Rows = hanaResult.rows,
+                differences = comparison.differences,
+                groups = comparisonDetail?.groups ?: emptyList(),
                 maxRowsPerSheet = 50_000
             )
             extraAttachments += EmailAttachment(
@@ -122,8 +133,76 @@ class EmailReportScheduler(
             request = body,
             queryResult = payloadForEmail,
             extraAttachments = if (includeTabularXlsx) extraAttachments else emptyList(),
-            attachTabularXlsx = includeDefaultTableAttachment
+            attachTabularXlsx = includeDefaultTableAttachment,
+            comparisonDetail = comparisonDetail
         )
+    }
+
+    fun previewComparison(request: ComparisonPreviewRequest, ctx: UpstreamContext): ComparisonPreviewResponse {
+        val query = request.sql.trim()
+        val secondQuery = request.secondSql.trim()
+        require(query.isNotEmpty()) { "SQL nao pode ser vazia" }
+        require(secondQuery.isNotEmpty()) { "Para comparar com SAP, informe 'secondSql'" }
+        ReadOnlySqlValidator.requireReadOnly(query)
+        ReadOnlySqlValidator.requireReadOnly(secondQuery)
+        validateComparisonColumns(
+            columns = request.comparisonColumns,
+            ignoreColumns = request.comparisonIgnoreColumns,
+            groupBy = request.comparisonGroupBy,
+            valueColumn = request.comparisonValueColumn
+        )
+        validateTolerances(request.comparisonTolerances, "comparisonTolerances")
+        validateTolerances(request.comparisonTolerancePercents, "comparisonTolerancePercents")
+
+        val result = sqlExecClient.exec(
+            endpointUrl = ctx.endpointUrl,
+            bearer = ctx.bearer,
+            query = query,
+            asDict = true,
+            withDescription = true
+        )
+        val sourceRows = (result["data"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> } ?: emptyList()
+        val hanaResult = hanaQueryService.exec(secondQuery)
+
+        val options = ComparisonOptions(
+            comparisonKey = request.comparisonKey?.trim().takeUnless { it.isNullOrBlank() },
+            tolerances = request.comparisonTolerances,
+            tolerancePercents = request.comparisonTolerancePercents,
+            columns = request.comparisonColumns,
+            ignoreColumns = request.comparisonIgnoreColumns
+        )
+        val comparison = comparisonService.compareRows(sourceRows, hanaResult.rows, options)
+        val columnsSource1 = sourceRows.firstOrNull()?.keys?.toList() ?: emptyList()
+        val totalDif = comparison.onlyInSource1 + comparison.onlyInSource2 + comparison.differentRows
+        val totalBase = totalDif + comparison.matchedRows
+        val sampleLimit = (request.sampleLimit ?: 50).coerceIn(0, 500)
+
+        return ComparisonPreviewResponse(
+            status = if (comparison.hasDifference) "DIVERGENCIA" else "SEM_DIVERGENCIA",
+            onlyInSource1 = comparison.onlyInSource1,
+            onlyInSource2 = comparison.onlyInSource2,
+            differentRows = comparison.differentRows,
+            matchedRows = comparison.matchedRows,
+            divergencePercent = if (totalBase == 0) 0.0 else totalDif * 100.0 / totalBase,
+            columnsSource1 = columnsSource1,
+            columnsSource2 = hanaResult.columns,
+            comparedColumns = comparisonService.comparedColumns(columnsSource1, hanaResult.columns, options),
+            groups = comparisonService.aggregate(
+                comparison.differences,
+                request.comparisonGroupBy,
+                request.comparisonValueColumn
+            ),
+            differencesSample = comparisonService
+                .topDifferences(comparison.differences, request.comparisonValueColumn, sampleLimit)
+                .map { it.toView() },
+            differencesTotal = comparison.differences.size
+        )
+    }
+
+    fun runNow(id: String) {
+        val key = findJobKey(id) ?: throw IllegalArgumentException("Agendamento nao encontrado")
+        scheduler.triggerJob(key)
+        log.info("Email schedule triggered manually scheduleId={}", id)
     }
 
     private val jobGroup = "email-report"
@@ -189,6 +268,12 @@ class EmailReportScheduler(
             put("secondSql", body.secondSql ?: "")
             put("comparisonKey", body.comparisonKey ?: "")
             put("comparisonTolerances", comparisonService.serializeTolerances(body.comparisonTolerances))
+            put("comparisonTolerancePercents", comparisonService.serializeTolerances(body.comparisonTolerancePercents))
+            put("comparisonColumns", comparisonService.serializeColumns(body.comparisonColumns))
+            put("comparisonIgnoreColumns", comparisonService.serializeColumns(body.comparisonIgnoreColumns))
+            put("comparisonGroupBy", body.comparisonGroupBy ?: "")
+            put("comparisonValueColumn", body.comparisonValueColumn ?: "")
+            put("comparisonTopN", body.comparisonTopN ?: 10)
             put("sendOnlyIfDifferent", body.sendOnlyIfDifferent ?: true)
             put("time", body.time)
             put("days", days.joinToString(",") { it.name })
@@ -258,6 +343,12 @@ class EmailReportScheduler(
             .usingJobData("secondSql", body.secondSql ?: "")
             .usingJobData("comparisonKey", body.comparisonKey ?: "")
             .usingJobData("comparisonTolerances", comparisonService.serializeTolerances(body.comparisonTolerances))
+            .usingJobData("comparisonTolerancePercents", comparisonService.serializeTolerances(body.comparisonTolerancePercents))
+            .usingJobData("comparisonColumns", comparisonService.serializeColumns(body.comparisonColumns))
+            .usingJobData("comparisonIgnoreColumns", comparisonService.serializeColumns(body.comparisonIgnoreColumns))
+            .usingJobData("comparisonGroupBy", body.comparisonGroupBy ?: "")
+            .usingJobData("comparisonValueColumn", body.comparisonValueColumn ?: "")
+            .usingJobData("comparisonTopN", body.comparisonTopN ?: 10)
             .usingJobData("sendOnlyIfDifferent", body.sendOnlyIfDifferent ?: true)
             .usingJobData("time", body.time)
             .usingJobData("days", days.joinToString(",") { it.name })
@@ -306,6 +397,12 @@ class EmailReportScheduler(
                 secondSql = body.secondSql,
                 comparisonKey = body.comparisonKey,
                 comparisonTolerances = body.comparisonTolerances,
+                comparisonTolerancePercents = body.comparisonTolerancePercents,
+                comparisonColumns = body.comparisonColumns,
+                comparisonIgnoreColumns = body.comparisonIgnoreColumns,
+                comparisonGroupBy = body.comparisonGroupBy,
+                comparisonValueColumn = body.comparisonValueColumn,
+                comparisonTopN = body.comparisonTopN ?: 10,
                 sendOnlyIfDifferent = body.sendOnlyIfDifferent ?: true
             )
     }
@@ -322,8 +419,59 @@ class EmailReportScheduler(
             val secondSql = body.secondSql?.trim()
             require(!secondSql.isNullOrBlank()) { "Para comparar com SAP, informe 'secondSql'" }
             ReadOnlySqlValidator.requireReadOnly(secondSql)
+            validateComparisonColumns(
+                columns = body.comparisonColumns,
+                ignoreColumns = body.comparisonIgnoreColumns,
+                groupBy = body.comparisonGroupBy,
+                valueColumn = body.comparisonValueColumn
+            )
+            validateTolerances(body.comparisonTolerances, "comparisonTolerances")
+            validateTolerances(body.comparisonTolerancePercents, "comparisonTolerancePercents")
+            require((body.comparisonTopN ?: 0) >= 0) { "'comparisonTopN' nao pode ser negativo" }
         }
     }
+
+    private fun validateComparisonColumns(
+        columns: List<String>,
+        ignoreColumns: List<String>,
+        groupBy: String?,
+        valueColumn: String?
+    ) {
+        require(columns.isEmpty() || ignoreColumns.isEmpty()) {
+            "Informe 'comparisonColumns' ou 'comparisonIgnoreColumns', nao os dois"
+        }
+        // o separador ';' e' usado para guardar as listas na jobDataMap do Quartz
+        (columns + ignoreColumns + listOfNotNull(groupBy, valueColumn)).forEach { name ->
+            require(!name.contains(';')) { "Nome de coluna nao pode conter ';': $name" }
+        }
+    }
+
+    private fun validateTolerances(tolerances: Map<String, Double>, field: String) {
+        tolerances.forEach { (column, value) ->
+            require(column.isNotBlank()) { "Nome de campo em '$field' nao pode ser vazio" }
+            require(!value.isNaN() && !value.isInfinite() && value >= 0.0) {
+                "Tolerancia invalida em '$field' para '$column': $value"
+            }
+        }
+    }
+
+    private fun comparisonOptions(body: EmailReportRequest) = ComparisonOptions(
+        comparisonKey = body.comparisonKey?.trim().takeUnless { it.isNullOrBlank() },
+        tolerances = body.comparisonTolerances,
+        tolerancePercents = body.comparisonTolerancePercents,
+        columns = body.comparisonColumns,
+        ignoreColumns = body.comparisonIgnoreColumns
+    )
+
+    private fun EmailComparisonDifference.toView() = ComparisonDifferenceView(
+        type = type.name,
+        key = key,
+        column = column,
+        value1 = value1?.toString(),
+        value2 = value2?.toString(),
+        delta = delta?.toDouble(),
+        row = row
+    )
 
     private fun findJobKey(id: String): JobKey? {
         val keys = scheduler.getJobKeys(GroupMatcher.anyGroup())
@@ -367,6 +515,12 @@ class EmailReportScheduler(
             secondSql = data.getString("secondSql")?.takeIf { it.isNotBlank() },
             comparisonKey = data.getString("comparisonKey")?.takeIf { it.isNotBlank() },
             comparisonTolerances = comparisonService.parseTolerances(data.getString("comparisonTolerances")),
+            comparisonTolerancePercents = comparisonService.parseTolerances(data.getString("comparisonTolerancePercents")),
+            comparisonColumns = comparisonService.parseColumns(data.getString("comparisonColumns")),
+            comparisonIgnoreColumns = comparisonService.parseColumns(data.getString("comparisonIgnoreColumns")),
+            comparisonGroupBy = data.getString("comparisonGroupBy")?.takeIf { it.isNotBlank() },
+            comparisonValueColumn = data.getString("comparisonValueColumn")?.takeIf { it.isNotBlank() },
+            comparisonTopN = if (data.containsKey("comparisonTopN")) data.getIntValue("comparisonTopN") else 10,
             sendOnlyIfDifferent = if (data.containsKey("sendOnlyIfDifferent")) data.getBooleanValue("sendOnlyIfDifferent") else true
         )
     }
