@@ -2,11 +2,17 @@ package com.chico.dbinspector.ai
 
 import com.chico.dbinspector.auth.AdminAuditService
 import com.chico.dbinspector.auth.AppUserDetailsService
+import com.chico.dbinspector.auth.AppUserEntity
 import com.chico.dbinspector.auth.AppUserRepository
 import com.chico.dbinspector.auth.AuthUserPrincipal
+import com.chico.dbinspector.auth.KeycloakAdminClient
+import com.chico.dbinspector.auth.KeycloakAdminException
+import com.chico.dbinspector.auth.KeycloakUserAccess
+import com.chico.dbinspector.auth.KeycloakUserService
 import com.chico.dbinspector.auth.PermissionCodes
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.report.ReportVersionService
+import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
@@ -19,6 +25,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Tokens para agentes de IA (qualquer fornecedor) criarem relatorios pela API.
@@ -36,6 +43,8 @@ class AiTokenService(
     private val userDetailsService: AppUserDetailsService,
     private val auditService: AdminAuditService,
     private val properties: DbInspectorProperties,
+    private val keycloakUserService: KeycloakUserService,
+    private val keycloakAdmin: KeycloakAdminClient? = null,
     private val clock: Clock = Clock.systemUTC()
 ) {
     companion object {
@@ -51,9 +60,14 @@ class AiTokenService(
         )
 
         private val LAST_USE_THROTTLE: Duration = Duration.ofMinutes(1)
+
+        /** Quanto tempo um perfil retirado no Keycloak ainda vale num token de IA. */
+        private val KEYCLOAK_ACCESS_TTL: Duration = Duration.ofMinutes(5)
     }
 
+    private val log = LoggerFactory.getLogger(AiTokenService::class.java)
     private val random = SecureRandom()
+    private val keycloakAccessCache = ConcurrentHashMap<String, CachedAccess>()
 
     @Transactional
     fun create(request: AiTokenCreateRequest): AiTokenCreatedResponse {
@@ -127,10 +141,7 @@ class AiTokenService(
         val creatorId = token.createdByUserId ?: return null
         val creator = userRepository.findById(creatorId).orElse(null) ?: return null
         if (!creator.active) return null
-        val creatorDetails = runCatching { userDetailsService.loadUserByUsername(creator.email) }
-            .getOrNull() as? AuthUserPrincipal ?: return null
-
-        val creatorAuthorities = creatorDetails.authorities.map { it.authority }
+        val creatorAuthorities = creatorAuthorities(creator) ?: return null
         val isAdmin = creatorAuthorities.any { it.equals("ROLE_ADMIN", ignoreCase = true) }
         val roles = creatorAuthorities.filter { it.startsWith("ROLE_") }
         // Admin tem todas as permissoes no catalogo; as dos demais vem dos papeis.
@@ -151,6 +162,45 @@ class AiTokenService(
         )
         return AiTokenIdentity(principal, token.id ?: return null, token.name)
     }
+
+    /**
+     * Perfis de quem criou o token, agora. Quem entra pelo Keycloak e consultado la: o token de IA nao traz
+     * JWT de onde ler os perfis, e a copia do ultimo acesso pode ter meses. Keycloak fora do ar nega o token.
+     */
+    private fun creatorAuthorities(creator: AppUserEntity): List<String>? {
+        val keycloakId = creator.keycloakId
+        if (keycloakId != null) {
+            // Sem o Keycloak para consultar, a unica fonte seria a copia local: nega.
+            if (!properties.keycloak.enabled) return null
+            val access = keycloakAccess(keycloakId) ?: return null
+            if (!access.enabled) return null
+            return keycloakUserService.authoritiesForRoleNames(access.roles)
+        }
+        if (!properties.localLoginEnabled()) return null
+        val details = runCatching { userDetailsService.loadUserByUsername(creator.email) }
+            .getOrNull() as? AuthUserPrincipal ?: return null
+        return details.authorities.map { it.authority }
+    }
+
+    private fun keycloakAccess(keycloakId: String): KeycloakUserAccess? {
+        val client = keycloakAdmin
+        if (client == null) {
+            log.warn("Token de IA recusado: consultar perfis no Keycloak exige dbinspector.keycloak.admin.enabled=true")
+            return null
+        }
+        val now = Instant.now(clock)
+        keycloakAccessCache[keycloakId]?.takeIf { it.expiresAt.isAfter(now) }?.let { return it.access }
+        val access = try {
+            client.userAccess(keycloakId)
+        } catch (e: KeycloakAdminException) {
+            log.warn("Token de IA recusado: nao foi possivel consultar o Keycloak ({})", e.message)
+            return null
+        } ?: return null
+        keycloakAccessCache[keycloakId] = CachedAccess(access, now.plus(KEYCLOAK_ACCESS_TTL))
+        return access
+    }
+
+    private data class CachedAccess(val access: KeycloakUserAccess, val expiresAt: Instant)
 
     private fun AiTokenEntity.toResponse(now: Instant) = AiTokenResponse(
         id = id?.toString() ?: error("Token sem id"),

@@ -5,6 +5,10 @@ import com.chico.dbinspector.auth.AppUserDetailsService
 import com.chico.dbinspector.auth.AppUserEntity
 import com.chico.dbinspector.auth.AppUserRepository
 import com.chico.dbinspector.auth.AuthUserPrincipal
+import com.chico.dbinspector.auth.KeycloakAdminClient
+import com.chico.dbinspector.auth.KeycloakAdminException
+import com.chico.dbinspector.auth.KeycloakUserAccess
+import com.chico.dbinspector.auth.KeycloakUserService
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.report.ReportVersionService
 import org.junit.jupiter.api.AfterEach
@@ -39,7 +43,17 @@ class AiTokenServiceTest {
     private val clock = Clock.fixed(now, ZoneOffset.UTC)
     private val properties = DbInspectorProperties()
 
-    private val service = AiTokenService(repository, userRepository, userDetailsService, auditService, properties, clock)
+    private val keycloakUserService = Mockito.mock(KeycloakUserService::class.java)
+    private val keycloakAdmin = Mockito.mock(KeycloakAdminClient::class.java)
+
+    private val service = AiTokenService(
+        repository, userRepository, userDetailsService, auditService, properties, keycloakUserService, clock = clock
+    )
+
+    private val keycloakProperties = DbInspectorProperties().apply { keycloak.enabled = true }
+    private val keycloakService = AiTokenService(
+        repository, userRepository, userDetailsService, auditService, keycloakProperties, keycloakUserService, keycloakAdmin, clock
+    )
 
     private val creatorId = UUID.randomUUID()
     private val creator = AppUserEntity(id = creatorId, name = "Ana", email = "ana@example.com", active = true)
@@ -152,6 +166,81 @@ class AiTokenServiceTest {
     fun `valor desconhecido ou sem prefixo nao autentica`() {
         assertNull(service.authenticate("rpt_inexistente"))
         assertNull(service.authenticate("eyJhbGciOiJIUzI1NiJ9.x.y"))
+    }
+
+    @Test
+    fun `criador do Keycloak age com os perfis que tem la agora e nao com a copia local`() {
+        creator.keycloakId = KEYCLOAK_ID
+        keycloakAccess(KeycloakUserAccess(enabled = true, roles = setOf("ANALISTA")))
+        Mockito.`when`(keycloakUserService.authoritiesForRoleNames(setOf("ANALISTA")))
+            .thenReturn(listOf("ROLE_ANALISTA", "REPORT_READ", "SQL_QUERY_EXECUTE"))
+        val value = keycloakService.create(AiTokenCreateRequest(name = "claude", validityDays = 5)).token
+
+        val authorities = assertNotNull(keycloakService.authenticate(value)).principal.authorities.map { it.authority }.toSet()
+
+        assertTrue("ROLE_ANALISTA" in authorities)
+        assertTrue("REPORT_READ" in authorities)
+        assertFalse("SQL_QUERY_EXECUTE" in authorities)
+        Mockito.verifyNoInteractions(userDetailsService)
+    }
+
+    @Test
+    fun `conta desativada ou apagada no Keycloak nega o token`() {
+        creator.keycloakId = KEYCLOAK_ID
+        val value = keycloakService.create(AiTokenCreateRequest(name = "x", validityDays = 1)).token
+
+        keycloakAccess(KeycloakUserAccess(enabled = false, roles = setOf("ANALISTA")))
+        assertNull(keycloakService.authenticate(value))
+
+        keycloakAccess(null)
+        assertNull(keycloakService.authenticate(value))
+    }
+
+    @Test
+    fun `Keycloak fora do ar nega o token`() {
+        creator.keycloakId = KEYCLOAK_ID
+        Mockito.`when`(keycloakAdmin.userAccess(KEYCLOAK_ID)).thenThrow(KeycloakAdminException("Nao foi possivel falar com o Keycloak"))
+        val value = keycloakService.create(AiTokenCreateRequest(name = "x", validityDays = 1)).token
+
+        assertNull(keycloakService.authenticate(value))
+    }
+
+    @Test
+    fun `consulta ao Keycloak fica em cache por alguns minutos`() {
+        creator.keycloakId = KEYCLOAK_ID
+        keycloakAccess(KeycloakUserAccess(enabled = true, roles = setOf("ANALISTA")))
+        Mockito.`when`(keycloakUserService.authoritiesForRoleNames(setOf("ANALISTA"))).thenReturn(listOf("REPORT_READ"))
+        val value = keycloakService.create(AiTokenCreateRequest(name = "x", validityDays = 1)).token
+
+        assertNotNull(keycloakService.authenticate(value))
+        assertNotNull(keycloakService.authenticate(value))
+
+        Mockito.verify(keycloakAdmin, Mockito.times(1)).userAccess(KEYCLOAK_ID)
+    }
+
+    @Test
+    fun `criador vinculado com o Keycloak desligado nao autentica pela copia local`() {
+        creator.keycloakId = KEYCLOAK_ID
+        val value = service.create(AiTokenCreateRequest(name = "x", validityDays = 1)).token
+
+        assertNull(service.authenticate(value))
+        Mockito.verifyNoInteractions(userDetailsService, keycloakAdmin)
+    }
+
+    @Test
+    fun `com Keycloak ligado criador sem vinculo com o Keycloak nao autentica`() {
+        val value = keycloakService.create(AiTokenCreateRequest(name = "x", validityDays = 1)).token
+
+        assertNull(keycloakService.authenticate(value))
+        Mockito.verifyNoInteractions(userDetailsService)
+    }
+
+    private fun keycloakAccess(access: KeycloakUserAccess?) {
+        Mockito.`when`(keycloakAdmin.userAccess(KEYCLOAK_ID)).thenReturn(access)
+    }
+
+    private companion object {
+        const val KEYCLOAK_ID = "kc-ana-0001"
     }
 
     private fun creatorAuthorities(vararg authorities: String) {

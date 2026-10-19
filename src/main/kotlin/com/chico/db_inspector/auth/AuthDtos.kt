@@ -30,6 +30,18 @@ data class AuthUserResponse(
     val permissions: List<String>
 )
 
+/** Publico: diz ao front como entrar. Nada aqui e segredo. */
+data class AuthConfigResponse(
+    val localLoginEnabled: Boolean,
+    val keycloak: KeycloakClientConfig?
+)
+
+data class KeycloakClientConfig(
+    val url: String,
+    val realm: String,
+    val clientId: String
+)
+
 data class AuthResponse(
     val tokenType: String = "Bearer",
     val accessToken: String,
@@ -78,14 +90,33 @@ data class AdminUserResponse(
     val email: String,
     val active: Boolean,
     val roles: List<String>,
+    /** Entra pelo Keycloak: nome, e-mail e perfis vem de la. */
+    val sso: Boolean,
     val createdAt: Long,
     val updatedAt: Long
 )
 
 data class AdminRoleResponse(
     val name: String,
-    val permissions: List<String>
+    val permissions: List<String>,
+    /** null com a sincronizacao de perfis desligada. */
+    val keycloak: KeycloakRoleStatus? = null
 )
+
+/** O perfil como role do client de login no Keycloak. */
+enum class KeycloakRoleStatus {
+    /** Role criada pelo agroreports: a tela cria, renomeia e exclui. */
+    SYNCED,
+
+    /** Existe, mas foi criada a mao no console (ex.: ADMIN): a tela nao renomeia nem exclui. */
+    MANUAL,
+
+    /** Nao existe no client: ninguem recebe o perfil pelo SSO. Salvar o perfil cria a role. */
+    MISSING,
+
+    /** O Keycloak nao respondeu agora. */
+    UNAVAILABLE
+}
 
 data class AdminCreateRoleRequest(
     @field:NotBlank
