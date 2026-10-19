@@ -5,9 +5,16 @@ import com.chico.dbinspector.ai.AiTokenService
 import com.chico.dbinspector.auth.AuthUserPrincipal
 import com.chico.dbinspector.auth.JwtService
 import com.chico.dbinspector.auth.AppUserDetailsService
+import com.chico.dbinspector.auth.KeycloakJwtService
+import com.chico.dbinspector.auth.KeycloakLoginRejectedException
+import com.chico.dbinspector.auth.KeycloakUserService
+import com.chico.dbinspector.config.DbInspectorProperties
+import io.jsonwebtoken.Claims
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.slf4j.LoggerFactory
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
@@ -21,8 +28,12 @@ import org.springframework.web.util.UrlPathHelper
 class JwtAuthenticationFilter(
     private val jwtService: JwtService,
     private val userDetailsService: AppUserDetailsService,
-    private val aiTokenService: AiTokenService
+    private val aiTokenService: AiTokenService,
+    private val keycloakJwtService: KeycloakJwtService,
+    private val keycloakUserService: KeycloakUserService,
+    private val properties: DbInspectorProperties
 ) : OncePerRequestFilter() {
+    private val log = LoggerFactory.getLogger(JwtAuthenticationFilter::class.java)
 
     companion object {
         const val AI_PATH_PREFIX = "/api/db/ai/"
@@ -49,6 +60,17 @@ class JwtAuthenticationFilter(
         // Token de IA nao e JWT: e validado aqui, antes do parse, que recusaria o valor com 401.
         if (token.startsWith(AiTokenService.TOKEN_PREFIX)) {
             authenticateAiToken(token, request, response, filterChain)
+            return
+        }
+
+        if (properties.keycloak.enabled && keycloakJwtService.isKeycloakToken(token)) {
+            authenticateKeycloak(token, request, response, filterChain)
+            return
+        }
+
+        // Token local (HS256): so vale com o Keycloak desligado.
+        if (!properties.localLoginEnabled()) {
+            response.status = HttpStatus.UNAUTHORIZED.value()
             return
         }
 
@@ -95,6 +117,39 @@ class JwtAuthenticationFilter(
         SecurityContextHolder.getContext().authentication = auth
         filterChain.doFilter(request, response)
     }
+
+    private fun authenticateKeycloak(
+        token: String,
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        filterChain: FilterChain
+    ) {
+        val claims = try {
+            keycloakJwtService.validate(token)
+        } catch (e: Exception) {
+            log.debug("Token do Keycloak recusado: {}", e.message)
+            response.status = HttpStatus.UNAUTHORIZED.value()
+            return
+        }
+        val principal = try {
+            resolveKeycloakPrincipal(claims)
+        } catch (e: KeycloakLoginRejectedException) {
+            writeError(response, HttpStatus.FORBIDDEN, e.message ?: "Acesso negado")
+            return
+        }
+        val auth = UsernamePasswordAuthenticationToken(principal, null, principal.authorities)
+        auth.details = WebAuthenticationDetailsSource().buildDetails(request)
+        SecurityContextHolder.getContext().authentication = auth
+        filterChain.doFilter(request, response)
+    }
+
+    /** Primeiro acesso em duas requisicoes simultaneas: a segunda perde na chave unica e acha o que a primeira gravou. */
+    private fun resolveKeycloakPrincipal(claims: Claims): AuthUserPrincipal =
+        try {
+            keycloakUserService.principalFor(claims)
+        } catch (_: DataIntegrityViolationException) {
+            keycloakUserService.principalFor(claims)
+        }
 
     private fun writeError(response: HttpServletResponse, status: HttpStatus, message: String) {
         response.status = status.value()

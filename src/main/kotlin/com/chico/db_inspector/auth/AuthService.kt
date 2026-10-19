@@ -1,5 +1,6 @@
 package com.chico.dbinspector.auth
 
+import com.chico.dbinspector.config.DbInspectorProperties
 import jakarta.transaction.Transactional
 import org.springframework.http.HttpStatus
 import org.springframework.security.authentication.AuthenticationManager
@@ -22,14 +23,33 @@ class AuthService(
     private val loginRateLimiter: LoginRateLimiter,
     private val adminAuditService: AdminAuditService,
     private val jwtService: JwtService,
-    private val authenticationManager: AuthenticationManager
+    private val authenticationManager: AuthenticationManager,
+    private val properties: DbInspectorProperties
 ) {
+    fun config(): AuthConfigResponse {
+        val keycloak = properties.keycloak
+        return AuthConfigResponse(
+            localLoginEnabled = properties.localLoginEnabled(),
+            keycloak = if (keycloak.enabled) {
+                KeycloakClientConfig(url = keycloak.url.trimEnd('/'), realm = keycloak.realm, clientId = keycloak.clientId)
+            } else {
+                null
+            }
+        )
+    }
+
     @Transactional
     fun login(request: LoginRequest, clientIp: String): AuthResponse {
+        requireLocalLogin(properties)
         val normalizedEmail = request.email.trim().lowercase()
         val limiterKey = "$normalizedEmail|$clientIp"
         if (!loginRateLimiter.isAllowed(limiterKey)) {
             throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Muitas tentativas de login. Tente novamente em instantes")
+        }
+        // Conta vinculada ao Keycloak nao entra mais por senha: os perfis dela vem do Keycloak, e a copia
+        // local pode estar velha.
+        if (userRepository.findByEmailIgnoreCase(normalizedEmail).map { it.keycloakId != null }.orElse(false)) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, SSO_ACCOUNT_MESSAGE)
         }
 
         val auth = try {
@@ -64,8 +84,10 @@ class AuthService(
         return issueTokens(user)
     }
 
-    @Transactional
+    // A recusa grava a revogacao antes de lancar o erro: ela nao pode ser desfeita junto.
+    @Transactional(dontRollbackOn = [ResponseStatusException::class])
     fun refresh(request: RefreshRequest): AuthResponse {
+        requireLocalLogin(properties)
         val tokenHash = jwtService.hashRefreshToken(request.refreshToken.trim())
         val entity = refreshTokenRepository.findByTokenHashAndRevokedFalse(tokenHash).orElseThrow {
             ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token invalido")
@@ -80,6 +102,11 @@ class AuthService(
         val user = entity.user ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Usuario invalido")
         if (!user.active) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Usuario inativo")
+        }
+        if (user.keycloakId != null) {
+            entity.revoked = true
+            refreshTokenRepository.save(entity)
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, SSO_ACCOUNT_MESSAGE)
         }
 
         entity.revoked = true
@@ -153,6 +180,15 @@ class AuthService(
     }
 }
 
+const val SSO_ACCOUNT_MESSAGE = "Esta conta entra pelo Keycloak (SSO)"
+
+/** Login, refresh e redefinicao de senha locais deixam de existir quando so o Keycloak autentica. */
+fun requireLocalLogin(properties: DbInspectorProperties) {
+    if (!properties.localLoginEnabled()) {
+        throw ResponseStatusException(HttpStatus.FORBIDDEN, "Login local desativado. Entre pelo Keycloak (SSO)")
+    }
+}
+
 @Component
 class AppUserDetailsService(
     private val userRepository: AppUserRepository,
@@ -179,7 +215,8 @@ class AppUserDetailsService(
             name = user.name?.trim().takeUnless { it.isNullOrBlank() } ?: "",
             email = user.email,
             passwordHash = user.passwordHash,
-            active = user.active,
+            // Vinculada ao Keycloak: token local (HS256) e senha nao valem mais para ela.
+            active = user.active && user.keycloakId == null,
             authoritiesList = roleAuthorities + permissionAuthorities
         )
     }

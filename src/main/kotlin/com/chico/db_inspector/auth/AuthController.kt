@@ -35,4 +35,7 @@ class AuthController(
 
     @GetMapping("/me")
     fun me(authentication: Authentication): AuthUserResponse = authService.me(authentication)
+
+    @GetMapping("/config")
+    fun config(): AuthConfigResponse = authService.config()
 }

@@ -11,8 +11,46 @@ data class DbInspectorProperties(
     var schedule: ScheduleProperties = ScheduleProperties(),
     var reports: ReportsProperties = ReportsProperties(),
     var security: SecurityProperties = SecurityProperties(),
-    var ai: AiProperties = AiProperties()
+    var ai: AiProperties = AiProperties(),
+    var keycloak: KeycloakProperties = KeycloakProperties()
 ) {
+    /**
+     * Login com e-mail e senha do proprio sistema (/api/auth/login, refresh, redefinicao de senha): so com o
+     * Keycloak desligado. Ligado, so o SSO autentica e os tokens locais ainda validos sao recusados;
+     * desligar o Keycloak e o caminho de volta.
+     */
+    fun localLoginEnabled(): Boolean = !keycloak.enabled
+
+    /**
+     * Login pelo Keycloak. Ligado, o backend aceita os tokens do realm (RS256, validados pelo JWKS), recusa o
+     * login local e o front e instruido por GET /api/auth/config a mostrar so o SSO.
+     */
+    data class KeycloakProperties(
+        var enabled: Boolean = false,
+        var url: String = "",
+        var realm: String = "",
+        /** Client publico do front; o token so e aceito se foi emitido para ele (claim azp). */
+        var clientId: String = "",
+        var admin: KeycloakAdminProperties = KeycloakAdminProperties()
+    ) {
+        fun issuer(): String = "${url.trimEnd('/')}/realms/$realm"
+        fun jwksUri(): String = "${issuer()}/protocol/openid-connect/certs"
+    }
+
+    /**
+     * Client confidencial com service account, usado para criar, renomear e excluir os perfis como roles
+     * do client de login. Em realm-management precisa de view-clients, manage-clients e view-users.
+     */
+    data class KeycloakAdminProperties(
+        var enabled: Boolean = false,
+        var clientId: String = "",
+        var clientSecret: String = "",
+        var timeoutMs: Long = 5_000
+    ) {
+        override fun toString(): String =
+            "KeycloakAdminProperties(enabled=$enabled, clientId=$clientId, clientSecret=***, timeoutMs=$timeoutMs)"
+    }
+
     data class AiProperties(
         var tokenMaxDays: Int = 90,
         var tokenDefaultDays: Int = 30,
