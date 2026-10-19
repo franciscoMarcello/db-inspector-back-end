@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Component
 import org.springframework.web.reactive.function.client.WebClient
 import reactor.core.publisher.Mono
+import java.time.Duration
 
 @Component
 class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebClient) {
@@ -22,6 +23,19 @@ class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebCli
         query: String,
         asDict: Boolean = true,
         withDescription: Boolean = true
+    ): Map<String, Any?> = doExec(endpointUrl, bearer, query, asDict, withDescription, timeout = null)
+
+    /** Igual a [exec], mas desiste de esperar a resposta depois de [timeout]. */
+    fun execWithTimeout(endpointUrl: String, bearer: String, query: String, timeout: Duration): Map<String, Any?> =
+        doExec(endpointUrl, bearer, query, asDict = true, withDescription = true, timeout = timeout)
+
+    private fun doExec(
+        endpointUrl: String,
+        bearer: String,
+        query: String,
+        asDict: Boolean,
+        withDescription: Boolean,
+        timeout: Duration?
     ): Map<String, Any?> {
 
         val payload = mapOf(
@@ -65,7 +79,8 @@ class SqlExecClient(@Qualifier("sqlExecWebClient") private val webClient: WebCli
                         }
                     }
             }
-            .block() ?: error("Sem resposta")
+            .let { mono -> if (timeout != null) mono.block(timeout) else mono.block() }
+            ?: error("Sem resposta")
 
         val status = entity.statusCode
         val headers = entity.headers

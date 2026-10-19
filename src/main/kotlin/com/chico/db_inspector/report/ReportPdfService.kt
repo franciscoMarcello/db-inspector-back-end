@@ -69,7 +69,8 @@ class ReportPdfService {
             val logoBytes = loadLogoBytes()
             val jasperParams = mutableMapOf<String, Any?>(
                 "REPORT_NAME" to entity.name,
-                "REPORT_QUERY" to execution.query
+                "REPORT_QUERY" to execution.query,
+                "FMT" to JasperFormat
             ).apply {
                 if (request.safe) {
                     putAll(coerceParamsForTemplate(request.params, jasperReport.parameters))
@@ -127,20 +128,6 @@ class ReportPdfService {
             )
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, ex.message ?: "Erro de validacao", ex)
         }
-    }
-
-    private fun sanitizeJrxml(raw: String): String {
-        var result = raw
-        result = result.replace(
-            Regex("""(<\s*jasperReport\b[^>]*?)\s+uuid\s*=\s*"[^"]*"([^>]*>)""", RegexOption.IGNORE_CASE)
-        ) { match -> "${match.groupValues[1]}${match.groupValues[2]}" }
-        result = result.replace(
-            Regex("""<\s*queryString\b[^>]*>(.*?)<\s*/\s*queryString\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        ) { match -> "<query language=\"sql\">${match.groupValues[1]}</query>" }
-        result = result.replace(
-            Regex("""<\s*query\b[^>]*language\s*=\s*"json"[^>]*>.*?<\s*/\s*query\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        ) { "<query language=\"sql\"><![CDATA[]]></query>" }
-        return result
     }
 
     private fun configureJasperCompiler() {
@@ -251,4 +238,19 @@ class ReportPdfService {
             }
             else -> throw IllegalArgumentException("valor date invalido")
         }
+}
+
+/** Ajustes de compatibilidade do JRXML antes de compilar (uuid na raiz, queryString antiga, query json). */
+internal fun sanitizeJrxml(raw: String): String {
+    var result = raw
+    result = result.replace(
+        Regex("""(<\s*jasperReport\b[^>]*?)\s+uuid\s*=\s*"[^"]*"([^>]*>)""", RegexOption.IGNORE_CASE)
+    ) { match -> "${match.groupValues[1]}${match.groupValues[2]}" }
+    result = result.replace(
+        Regex("""<\s*queryString\b[^>]*>(.*?)<\s*/\s*queryString\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    ) { match -> "<query language=\"sql\">${match.groupValues[1]}</query>" }
+    result = result.replace(
+        Regex("""<\s*query\b[^>]*language\s*=\s*"json"[^>]*>.*?<\s*/\s*query\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    ) { "<query language=\"sql\"><![CDATA[]]></query>" }
+    return result
 }

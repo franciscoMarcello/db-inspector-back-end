@@ -1,5 +1,7 @@
 package com.chico.dbinspector.controller
 
+import com.chico.dbinspector.email.ComparisonPreviewRequest
+import com.chico.dbinspector.email.ComparisonPreviewResponse
 import com.chico.dbinspector.email.EmailReportRequest
 import com.chico.dbinspector.email.EmailReportScheduler
 import com.chico.dbinspector.email.EmailScheduleResponse
@@ -66,6 +68,20 @@ class EmailScheduleController(
     fun delete(@PathVariable id: String): ResponseEntity<Void> {
         scheduler.deleteSchedule(id)
         return ResponseEntity.noContent().build()
+    }
+
+    @PostMapping("/preview")
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_WRITE')")
+    fun preview(
+        @Valid @RequestBody body: ComparisonPreviewRequest,
+        ctx: UpstreamContext
+    ): ComparisonPreviewResponse = scheduler.previewComparison(body, ctx)
+
+    @PostMapping("/{id}/run")
+    @PreAuthorize("hasAuthority('EMAIL_SCHEDULE_WRITE')")
+    fun run(@PathVariable id: String): ResponseEntity<Void> {
+        scheduler.runNow(id)
+        return ResponseEntity.accepted().build()
     }
 
     @PostMapping("/{id}/pause")

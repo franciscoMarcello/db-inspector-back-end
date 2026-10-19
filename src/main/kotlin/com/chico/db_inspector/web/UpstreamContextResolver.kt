@@ -10,22 +10,14 @@ import org.springframework.web.context.request.NativeWebRequest
 import org.springframework.web.method.support.HandlerMethodArgumentResolver
 import org.springframework.web.method.support.ModelAndViewContainer
 
+/** Monta o contexto do upstream sql/exec. Usado pelo resolver do MVC e por quem roda fora dele (MCP). */
 @Component
-class UpstreamContextResolver(
+class UpstreamContextFactory(
     private val properties: DbInspectorProperties,
     @Value("\${dbinspector.allowLocalhost:true}") private val allowLocalhost: Boolean,
     @Value("\${dbinspector.requirePathSuffix:/sql/exec/}") private val requirePathSuffix: String
-) : HandlerMethodArgumentResolver {
-
-    override fun supportsParameter(parameter: MethodParameter) =
-        parameter.parameterType == UpstreamContext::class.java
-
-    override fun resolveArgument(
-        parameter: MethodParameter,
-        mavContainer: ModelAndViewContainer?,
-        webRequest: NativeWebRequest,
-        binderFactory: WebDataBinderFactory?
-    ): Any {
+) {
+    fun create(): UpstreamContext {
         val url = properties.sqlExecBaseUrl.trim()
         require(url.isNotBlank()) { "dbinspector.sqlExecBaseUrl obrigatorio" }
         UpstreamUtils.validateExternalUrl(url, allowLocalhost = allowLocalhost, requirePathSuffix = requirePathSuffix)
@@ -41,4 +33,20 @@ class UpstreamContextResolver(
 
         return UpstreamContext(url, bearer)
     }
+}
+
+@Component
+class UpstreamContextResolver(
+    private val factory: UpstreamContextFactory
+) : HandlerMethodArgumentResolver {
+
+    override fun supportsParameter(parameter: MethodParameter) =
+        parameter.parameterType == UpstreamContext::class.java
+
+    override fun resolveArgument(
+        parameter: MethodParameter,
+        mavContainer: ModelAndViewContainer?,
+        webRequest: NativeWebRequest,
+        binderFactory: WebDataBinderFactory?
+    ): Any = factory.create()
 }

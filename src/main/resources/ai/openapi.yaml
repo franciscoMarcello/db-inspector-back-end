@@ -1,0 +1,329 @@
+openapi: 3.1.0
+info:
+  title: DB Inspector - relatorios para agentes de IA
+  version: "1.0"
+  description: >-
+    Cria e altera RASCUNHOS de relatorios sobre o banco PostgreSQL do AgroMobi. Publicar e decisao de
+    uma pessoa, na tela. Leia GET /api/db/ai/instrucoes antes de comecar. Erros 422 trazem problemas[]
+    com regra, caminho, mensagem e linha: corrija todos e valide de novo.
+servers:
+  - url: "{{BASE_URL}}"
+security:
+  - token: []
+paths:
+  /api/db/ai/instrucoes:
+    get:
+      operationId: lerInstrucoes
+      summary: Instrucoes completas (ciclo, regras do validador, limites). Leia primeiro.
+      responses:
+        "200": { description: Markdown, content: { text/markdown: { schema: { type: string } } } }
+  /api/db/ai/instrucoes/arquivo:
+    get:
+      operationId: lerArquivoDeInstrucao
+      summary: Glossario ou exemplo (ex. glossario/README.md, exemplos/<nome>/definicao.json)
+      parameters:
+        - { name: caminho, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Conteudo do arquivo, content: { text/plain: { schema: { type: string } } } }
+  /api/db/ai/instrucoes/arquivos:
+    get:
+      operationId: listarArquivosDeInstrucao
+      summary: Lista glossario e exemplos disponiveis
+      responses:
+        "200": { description: Caminhos, content: { application/json: { schema: { type: array, items: { type: string } } } } }
+  /api/db/ai/catalogo/schemas:
+    get:
+      operationId: listarSchemas
+      summary: Schemas liberados para IA e quantidade de tabelas
+      responses:
+        "200": { description: Schemas, content: { application/json: { schema: { type: object } } } }
+  /api/db/ai/catalogo/tabelas:
+    get:
+      operationId: buscarTabelas
+      summary: Busca tabelas pelo nome da tabela ou de colunas
+      parameters:
+        - { name: busca, in: query, required: true, schema: { type: string }, description: "Ex. colheita umidade" }
+        - { name: schema, in: query, required: false, schema: { type: string } }
+        - { name: limite, in: query, required: false, schema: { type: integer, default: 30 } }
+      responses:
+        "200": { description: Tabelas encontradas, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /api/db/ai/catalogo/tabelas/{schema}/{tabela}:
+    get:
+      operationId: descreverTabela
+      summary: Colunas (conferidas ao vivo), PK, FKs nos dois sentidos e linhas estimadas
+      parameters:
+        - { name: schema, in: path, required: true, schema: { type: string } }
+        - { name: tabela, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Descricao, content: { application/json: { schema: { type: object } } } }
+  /api/db/ai/consultas:
+    post:
+      operationId: consultar
+      summary: Executa SELECT exploratorio para testar hipotese (nada e gravado; poucas linhas)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sql]
+              properties:
+                sql: { type: string }
+                limite: { type: integer }
+      responses:
+        "200": { description: Colunas e linhas, content: { application/json: { schema: { $ref: "#/components/schemas/ResultadoConsulta" } } } }
+        "422": { $ref: "#/components/responses/Problemas" }
+        "429": { $ref: "#/components/responses/Limite" }
+  /api/db/ai/consultas/explicar:
+    post:
+      operationId: explicar
+      summary: Plano e custo estimado da consulta (EXPLAIN sem executar)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [sql], properties: { sql: { type: string } } } } }
+      responses:
+        "200": { description: Plano, content: { application/json: { schema: { type: object } } } }
+        "422": { $ref: "#/components/responses/Problemas" }
+  /api/db/ai/liberacoes:
+    post:
+      operationId: solicitarLiberacao
+      summary: Pede a uma pessoa para passar dos limites de linhas/custo numa consulta especifica
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sql, motivo]
+              properties:
+                sql: { type: string }
+                motivo: { type: string }
+                linhas: { type: integer }
+      responses:
+        "201": { description: Pedido, content: { application/json: { schema: { $ref: "#/components/schemas/Liberacao" } } } }
+  /api/db/ai/liberacoes/{id}:
+    get:
+      operationId: consultarLiberacao
+      summary: Situacao do pedido (PENDING, APPROVED, DENIED)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Pedido, content: { application/json: { schema: { $ref: "#/components/schemas/Liberacao" } } } }
+  /api/db/ai/pastas:
+    get:
+      operationId: listarPastas
+      summary: Pastas de relatorio
+      responses:
+        "200": { description: Pastas, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /api/db/ai/templates:
+    get:
+      operationId: listarTemplates
+      summary: Templates Jasper existentes (sem o JRXML)
+      responses:
+        "200": { description: Templates, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /api/db/ai/templates/{id}:
+    get:
+      operationId: obterTemplate
+      summary: Template Jasper com o JRXML
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Template, content: { application/json: { schema: { type: object } } } }
+  /api/db/ai/relatorios:
+    get:
+      operationId: listarRelatorios
+      summary: Relatorios existentes
+      responses:
+        "200": { description: Relatorios, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+    post:
+      operationId: criarRascunho
+      summary: Cria relatorio novo como rascunho (valida antes)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PedidoRascunho" } } }
+      responses:
+        "201": { description: Rascunho criado, content: { application/json: { schema: { $ref: "#/components/schemas/RascunhoGravado" } } } }
+        "422": { $ref: "#/components/responses/Problemas" }
+  /api/db/ai/relatorios/{id}:
+    get:
+      operationId: obterRelatorio
+      summary: Definicao publicada completa (SQL, variaveis, JRXML)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Relatorio, content: { application/json: { schema: { type: object } } } }
+  /api/db/ai/relatorios/{id}/rascunho:
+    put:
+      operationId: salvarRascunho
+      summary: Nova versao (rascunho) de relatorio existente; a publicada continua valendo
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PedidoRascunho" } } }
+      responses:
+        "200": { description: Rascunho gravado, content: { application/json: { schema: { $ref: "#/components/schemas/RascunhoGravado" } } } }
+        "422": { $ref: "#/components/responses/Problemas" }
+  /api/db/ai/relatorios/{id}/versoes:
+    get:
+      operationId: listarVersoes
+      summary: Historico de versoes
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Versoes, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /api/db/ai/relatorios/{id}/versoes/{versao}:
+    get:
+      operationId: obterVersao
+      summary: Definicao de uma versao
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: versao, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Versao, content: { application/json: { schema: { type: object } } } }
+  /api/db/ai/relatorios/validar:
+    post:
+      operationId: validar
+      summary: Valida a definicao sem gravar e devolve todos os problemas
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [definicao]
+              properties:
+                definicao: { $ref: "#/components/schemas/Definicao" }
+                parametrosTeste: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Resultado, content: { application/json: { schema: { $ref: "#/components/schemas/Validacao" } } } }
+  /api/db/ai/relatorios/{id}/versoes/{versao}/previa:
+    post:
+      operationId: previa
+      summary: Executa a versao com dados reais (poucas linhas)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: versao, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content: { application/json: { schema: { $ref: "#/components/schemas/Parametros" } } }
+      responses:
+        "200": { description: Resultado, content: { application/json: { schema: { $ref: "#/components/schemas/ResultadoConsulta" } } } }
+        "422": { $ref: "#/components/responses/Problemas" }
+  /api/db/ai/relatorios/{id}/versoes/{versao}/pdf/resumo:
+    post:
+      operationId: previaPdf
+      summary: Gera o PDF da versao e devolve paginas e tamanho
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: versao, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content: { application/json: { schema: { $ref: "#/components/schemas/Parametros" } } }
+      responses:
+        "200": { description: Resumo, content: { application/json: { schema: { type: object } } } }
+        "422": { $ref: "#/components/responses/Problemas" }
+components:
+  securitySchemes:
+    token:
+      type: http
+      scheme: bearer
+      description: Token rpt_... gerado em Relatorios > Tokens para IA
+  responses:
+    Problemas:
+      description: Validacao falhou
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              erro: { type: string }
+              problemas: { type: array, items: { $ref: "#/components/schemas/Problema" } }
+    Limite:
+      description: Limite de uso atingido
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              erro: { type: string }
+              mensagem: { type: string }
+              dica: { type: string }
+  schemas:
+    Problema:
+      type: object
+      properties:
+        caminho: { type: string }
+        regra: { type: string }
+        mensagem: { type: string }
+        linha: { type: [integer, "null"] }
+    Variavel:
+      type: object
+      required: [chave, rotulo, tipo]
+      properties:
+        chave: { type: string, description: "Igual ao :nome no SQL" }
+        rotulo: { type: string }
+        tipo: { type: string, enum: [string, number, date, datetime, boolean] }
+        obrigatoria: { type: boolean, default: true }
+        multipla: { type: boolean, default: false, description: "Use IN :nome sem parenteses" }
+        padrao: { type: [string, "null"] }
+        sqlOpcoes: { type: [string, "null"], description: "SELECT que devolve as colunas valor e descricao" }
+    Definicao:
+      type: object
+      required: [nome, sql]
+      properties:
+        nome: { type: string }
+        descricao: { type: [string, "null"] }
+        pastaId: { type: [string, "null"] }
+        sql: { type: string, description: "SELECT/WITH PostgreSQL, sem comentarios, tabelas com schema" }
+        sqlSap: { type: [string, "null"] }
+        chaveComparacao: { type: [string, "null"] }
+        variaveis: { type: array, items: { $ref: "#/components/schemas/Variavel" } }
+        templateId: { type: [string, "null"] }
+        jrxml: { type: [string, "null"] }
+    PedidoRascunho:
+      type: object
+      required: [definicao]
+      properties:
+        definicao: { $ref: "#/components/schemas/Definicao" }
+        nota: { type: string, description: "Hipoteses testadas e numeros de conferencia, para quem vai publicar" }
+        parametrosTeste: { type: object, additionalProperties: true }
+    RascunhoGravado:
+      type: object
+      properties:
+        relatorioId: { type: string }
+        versao: { type: integer }
+        status: { type: string }
+        avisos: { type: array, items: { $ref: "#/components/schemas/Problema" } }
+        mensagem: { type: string }
+    Validacao:
+      type: object
+      properties:
+        valido: { type: boolean }
+        problemas: { type: array, items: { $ref: "#/components/schemas/Problema" } }
+        avisos: { type: array, items: { $ref: "#/components/schemas/Problema" } }
+        colunas: { type: array, items: { type: string } }
+        camposDoTemplate: { type: array, items: { type: string } }
+        custoEstimado: { type: [number, "null"] }
+    Parametros:
+      type: object
+      properties:
+        parametros: { type: object, additionalProperties: true }
+        linhas: { type: integer }
+    ResultadoConsulta:
+      type: object
+      properties:
+        colunas: { type: array, items: { type: string } }
+        linhas: { type: array, items: { type: object, additionalProperties: true } }
+        quantidade: { type: integer }
+        truncado: { type: boolean }
+        custoEstimado: { type: [number, "null"] }
+        tempoMs: { type: integer }
+        aviso: { type: [string, "null"] }
+    Liberacao:
+      type: object
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [PENDING, APPROVED, DENIED] }
+        linhasAprovadas: { type: [integer, "null"] }
+        expiraEm: { type: [integer, "null"] }
+        vigente: { type: boolean }
+        nota: { type: [string, "null"] }

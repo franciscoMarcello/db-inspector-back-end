@@ -1,0 +1,10 @@
+{
+  "nome": "Modelo sintetico",
+  "descricao": "Relatorio de teste: peso e custo por fazenda e produto.",
+  "sql": "SELECT f.nome AS fazenda, 'SOJA' AS produto, SUM(c.peso_real) AS peso_kg, SUM(c.peso_real) * 2 AS custo FROM agricola.colheita c JOIN agro.fazenda f ON f.id = c.fazenda_id WHERE c.dt::date >= :data_inicio AND (:fazenda IS NULL OR c.fazenda_id IN :fazenda) GROUP BY f.nome ORDER BY f.nome",
+  "variaveis": [
+    { "chave": "data_inicio", "rotulo": "Data inicial", "tipo": "date", "obrigatoria": true, "multipla": false },
+    { "chave": "fazenda", "rotulo": "Fazenda", "tipo": "string", "obrigatoria": false, "multipla": true,
+      "sqlOpcoes": "SELECT f.id AS valor, f.nome AS descricao FROM agro.fazenda f ORDER BY f.nome" }
+  ]
+}

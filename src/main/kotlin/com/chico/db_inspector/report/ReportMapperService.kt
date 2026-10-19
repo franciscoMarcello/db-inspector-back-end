@@ -4,7 +4,7 @@ import org.springframework.stereotype.Service
 
 @Service
 class ReportMapperService {
-    fun toResponse(entity: ReportEntity): ReportResponse {
+    fun toResponse(entity: ReportEntity, openDraftVersion: Int? = null): ReportResponse {
         val created = entity.createdAt ?: error("createdAt ausente")
         val updated = entity.updatedAt ?: error("updatedAt ausente")
         return ReportResponse(
@@ -46,7 +46,9 @@ class ReportMapperService {
             createdAt = created.toEpochMilli(),
             updatedAt = updated.toEpochMilli(),
             secondSql = entity.secondSql,
-            comparisonKey = entity.comparisonKey
+            comparisonKey = entity.comparisonKey,
+            draft = entity.draft,
+            openDraftVersion = openDraftVersion
         )
     }
 }
