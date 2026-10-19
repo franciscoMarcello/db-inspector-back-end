@@ -1,5 +1,6 @@
 package com.chico.dbinspector.report
 
+import com.chico.dbinspector.ai.AiJrxmlGuard
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
@@ -8,6 +9,7 @@ import com.chico.dbinspector.web.UpstreamContext
 import org.springframework.data.domain.Sort
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
 import java.time.Clock
@@ -30,6 +32,8 @@ class ReportService(
     private val validationService: ReportValidationService,
     private val summaryService: ReportSummaryService,
     private val comparisonService: ReportComparisonService,
+    private val versionService: ReportVersionService,
+    private val jrxmlGuard: AiJrxmlGuard,
     private val sqlExecClient: SqlExecClient,
     private val hanaQueryService: HanaQueryService,
     private val properties: DbInspectorProperties,
@@ -43,12 +47,16 @@ class ReportService(
     private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val defaultFilterOptionsLimit = 100
 
-    fun list(): List<ReportResponse> =
-        repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
-            .filter { accessControl.canViewReport(it) }
-            .map { mapperService.toResponse(it) }
+    fun list(): List<ReportResponse> {
+        val openDrafts = versionService.openDraftNumbers()
+        return repository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
+            .filter { accessControl.canViewReport(it) && (!it.draft || accessControl.canEditReport(it)) }
+            .map { mapperService.toResponse(it, openDrafts[it.id]) }
+    }
 
+    @Transactional
     fun create(request: ReportRequest): ReportResponse {
+        versionService.lockWrites()
         request.folderId?.let { accessControl.requireFolderAccess(it, AccessAction.EDIT) }
         val secondSql = request.secondSql?.trim().takeUnless { it.isNullOrBlank() }
         secondSql?.let { ReadOnlySqlValidator.requireReadOnly(it) }
@@ -66,14 +74,20 @@ class ReportService(
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
         ReadOnlySqlValidator.requireReadOnly(entity.sql)
         entity.replaceVariables(variableService.normalizeVariables(request.variables))
-        return mapperService.toResponse(repository.save(entity))
+        val saved = repository.save(entity)
+        versionService.recordPublished(saved)
+        return mapperService.toResponse(saved)
     }
 
+    @Transactional
     fun update(id: UUID, request: ReportRequest): ReportResponse {
+        // Trava antes de ler: a decisao rascunho x publicado usa o estado atual, nao um anterior a uma publicacao.
+        versionService.lockReport(id)
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
         accessControl.requireReportAccess(entity, AccessAction.EDIT)
+        versionService.ensureBaseline(entity)
         request.folderId?.let { accessControl.requireFolderAccess(it, AccessAction.EDIT) }
         val secondSql = request.secondSql?.trim().takeUnless { it.isNullOrBlank() }
         secondSql?.let { ReadOnlySqlValidator.requireReadOnly(it) }
@@ -89,22 +103,79 @@ class ReportService(
         require(entity.sql.isNotBlank()) { "SQL nao pode ser vazia" }
         ReadOnlySqlValidator.requireReadOnly(entity.sql)
         entity.replaceVariables(variableService.normalizeVariables(request.variables))
-        return mapperService.toResponse(repository.save(entity))
+        // Edicao pela tela publica direto; um relatorio ainda em rascunho continua rascunho.
+        val saved = repository.save(entity)
+        if (saved.draft) versionService.syncDraft(saved) else versionService.recordPublished(saved)
+        return mapperService.toResponse(saved)
     }
 
+    @Transactional
     fun delete(id: UUID) {
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
         accessControl.requireReportAccess(entity, AccessAction.DELETE)
+        versionService.deleteAll(id)
         repository.deleteById(id)
+    }
+
+    fun get(id: UUID): ReportResponse {
+        val entity = repository.findById(id).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        accessControl.requireReportAccess(entity, AccessAction.VIEW)
+        if (entity.draft && !accessControl.canEditReport(entity)) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        return mapperService.toResponse(entity, versionService.openDraftNumbers()[id])
+    }
+
+    /** Agendamentos so podem apontar para relatorio publicado. */
+    fun requirePublished(id: UUID) {
+        val entity = repository.findById(id).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        require(!entity.draft) { "Relatorio em rascunho nao pode ser agendado. Publique antes." }
+    }
+
+    private fun requireRunnable(entity: ReportEntity) {
+        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        if (entity.draft && !accessControl.canEditReport(entity)) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
     }
 
     fun run(id: UUID, ctx: UpstreamContext, request: ReportRunRequest): ReportRunResponse {
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
-        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        requireRunnable(entity)
+        return runPage(entity, ctx, request)
+    }
+
+    /** Previa de uma versao (rascunho ou antiga) sem publica-la. Exige permissao de edicao. */
+    @Transactional(readOnly = true)
+    fun runVersion(id: UUID, versionNumber: Int, ctx: UpstreamContext, request: ReportRunRequest): ReportRunResponse =
+        runPage(versionService.transientReport(id, versionNumber), ctx, request)
+
+    @Transactional(readOnly = true)
+    fun generateVersionPdf(id: UUID, versionNumber: Int, ctx: UpstreamContext, request: ReportRunRequest): ByteArray {
+        // JRXML de IA ja foi validado ao gravar; confere de novo antes de compilar no servidor.
+        val version = versionService.get(id, versionNumber)
+        if (version.authorType == ReportVersionAuthorType.AI_TOKEN.name) {
+            version.jrxml?.let { jrxml ->
+                val problems = jrxmlGuard.problems(jrxml)
+                if (problems.isNotEmpty()) {
+                    throw ResponseStatusException(HttpStatus.BAD_REQUEST, "JRXML recusado: ${problems.first().mensagem}")
+                }
+            }
+        }
+        val entity = versionService.transientReport(id, versionNumber)
+        val execution = executeReport(entity, ctx, request.params)
+        return pdfService.generatePdf(id, entity, execution, request)
+    }
+
+    private fun runPage(entity: ReportEntity, ctx: UpstreamContext, request: ReportRunRequest): ReportRunResponse {
         val page = (request.page ?: 0).coerceAtLeast(0)
         val size = (request.size ?: DEFAULT_PAGE_SIZE).coerceIn(1, MAX_PAGE_SIZE)
         val execution = executeReportPage(entity, ctx, request.params, page, size)
@@ -136,7 +207,7 @@ class ReportService(
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
-        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        requireRunnable(entity)
         val execution = executeReport(entity, ctx, request.params)
         val summaries = summaryService.compute(execution.columns, execution.allRows)
         val totalRows = execution.allRows.size
@@ -167,7 +238,7 @@ class ReportService(
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
-        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        requireRunnable(entity)
         val secondSql = entity.secondSql?.trim().takeIf { !it.isNullOrBlank() }
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Relatorio sem SQL de comparacao configurado")
 
@@ -225,7 +296,7 @@ class ReportService(
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
-        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        requireRunnable(entity)
 
         return columnsService.columns(entity, id, ctx, source, includeTypes, refresh)
     }
@@ -234,7 +305,7 @@ class ReportService(
         val entity = repository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
-        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        requireRunnable(entity)
         val execution = executeReport(entity, ctx, request.params)
         return pdfService.generatePdf(id, entity, execution, request)
     }
@@ -269,7 +340,7 @@ class ReportService(
         val entity = repository.findById(reportId).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
-        accessControl.requireReportAccess(entity, AccessAction.RUN)
+        requireRunnable(entity)
         val variable = entity.variables.firstOrNull { it.key.equals(variableKey, ignoreCase = true) }
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Variavel '$variableKey' nao encontrada")
         return try {
@@ -306,9 +377,9 @@ class ReportService(
 
     private fun resolveJasperTemplate(templateId: UUID?): ReportJasperTemplateEntity? {
         if (templateId == null) return null
-        return jasperTemplateRepository.findById(templateId).orElseThrow {
-            ResponseStatusException(HttpStatus.NOT_FOUND, "Template Jasper nao encontrado")
-        }
+        // Vincular trava o template, para nao cruzar com uma publicacao que decide altera-lo no lugar.
+        return jasperTemplateRepository.lockById(templateId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Template Jasper nao encontrado")
     }
 
     private fun executeReport(

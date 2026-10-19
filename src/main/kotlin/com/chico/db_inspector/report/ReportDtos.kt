@@ -50,7 +50,9 @@ data class ReportResponse(
     val createdAt: Long,
     val updatedAt: Long,
     val secondSql: String? = null,
-    val comparisonKey: String? = null
+    val comparisonKey: String? = null,
+    val draft: Boolean = false,
+    val openDraftVersion: Int? = null
 )
 
 data class ReportFolderSummaryResponse(
@@ -265,4 +267,63 @@ data class ReportColumnsResponse(
     val cache: ReportColumnsCacheInfo,
     val sources: Map<String, ReportColumnsSourceResponse>,
     val mergedColumns: List<String>
+)
+
+/** Conteudo versionado de um relatorio: o que muda de uma versao para outra. */
+data class ReportVersionContent(
+    val name: String,
+    val description: String?,
+    val folderId: UUID?,
+    val sql: String,
+    val secondSql: String?,
+    val comparisonKey: String?,
+    val variables: List<ReportVariableRequest>,
+    val jasperTemplateId: UUID?,
+    val jrxml: String?
+)
+
+data class ReportVersionActionRequest(
+    val note: String? = null,
+    /** `revision` da versao que a pessoa revisou; publicar recusa (409) se o rascunho mudou depois. */
+    val expectedRevision: Long? = null
+)
+
+data class ReportVersionSummaryResponse(
+    val versionNumber: Int,
+    val status: String,
+    val name: String,
+    val baseVersionNumber: Int?,
+    val authorType: String,
+    val authorName: String,
+    val note: String?,
+    val hasJrxml: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long?,
+    val publishedAt: Long?,
+    val publishedBy: String?,
+    val revision: Long = 0
+)
+
+data class ReportVersionResponse(
+    val reportId: String,
+    val versionNumber: Int,
+    val status: String,
+    val baseVersionNumber: Int?,
+    val name: String,
+    val description: String?,
+    val folderId: String?,
+    val sql: String,
+    val secondSql: String?,
+    val comparisonKey: String?,
+    val variables: List<ReportVariableRequest>,
+    val jasperTemplateId: String?,
+    val jrxml: String?,
+    val authorType: String,
+    val authorName: String,
+    val note: String?,
+    val createdAt: Long,
+    val updatedAt: Long?,
+    val publishedAt: Long?,
+    val publishedBy: String?,
+    val revision: Long = 0
 )

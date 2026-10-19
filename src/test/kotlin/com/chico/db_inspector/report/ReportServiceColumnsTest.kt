@@ -75,6 +75,8 @@ class ReportServiceColumnsTest {
             validationService = ReportValidationService(ReportVariableService(), ReportQueryService(), sqlExecClient),
             summaryService = ReportSummaryService(),
             comparisonService = ReportComparisonService(),
+            versionService = Mockito.mock(ReportVersionService::class.java),
+            jrxmlGuard = com.chico.dbinspector.ai.AiJrxmlGuard(),
             sqlExecClient = sqlExecClient,
             hanaQueryService = hanaQueryService,
             properties = DbInspectorProperties(),
@@ -130,6 +132,8 @@ class ReportServiceColumnsTest {
             validationService = ReportValidationService(ReportVariableService(), ReportQueryService(), sqlExecClient),
             summaryService = ReportSummaryService(),
             comparisonService = ReportComparisonService(),
+            versionService = Mockito.mock(ReportVersionService::class.java),
+            jrxmlGuard = com.chico.dbinspector.ai.AiJrxmlGuard(),
             sqlExecClient = sqlExecClient,
             hanaQueryService = hanaQueryService,
             properties = DbInspectorProperties()

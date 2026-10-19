@@ -412,6 +412,7 @@ class EmailReportScheduler(
             val mode = normalizePdfMode(body.pdfMode)
             if (mode == "report") {
                 require(body.reportId != null) { "Para anexar PDF com mode=report, informe 'reportId'" }
+                body.reportId?.let { reportService.requirePublished(it) }
             }
             require((body.pdfMaxRows ?: 2000) > 0) { "'pdfMaxRows' deve ser maior que zero" }
         }

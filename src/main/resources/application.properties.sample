@@ -35,4 +35,37 @@ dbinspector.security.acl-default-deny=false
 dbinspector.security.login-max-attempts=5
 dbinspector.security.login-window-seconds=60
 
+# Agentes de IA (tokens rpt_, API /api/db/ai, MCP /api/db/ai/mcp). Valores abaixo sao os padroes.
+# URL do backend que vai nas instrucoes para a IA; vazio = deduzida da requisicao
+dbinspector.ai.public-url=
+# Pasta FORA do git com o contexto do banco: catalogo.json (gerado por scripts/gerar_catalogo_ia.py) e
+# glossario/*.md (regras de negocio). Em producao, um volume montado. Sem ela a IA descobre o banco so ao vivo.
+dbinspector.ai.context-path=
+dbinspector.ai.token-default-days=30
+dbinspector.ai.token-max-days=90
+dbinspector.ai.allowed-schemas=agro,agricola,confinamento,contabil,contrato,estoque,fiscal,frota,produto,reproducao,sap
+# Tabelas avulsas fora dos schemas acima. Padrao (cadastros de apoio): public.res_partner, res_company,
+# res_city, res_country_state, res_currency e br.centro_custo, departamento, banco, cnae, calendario,
+# calendario_feriado, local_trabalho, localidade, mes, orgao_emissor. Nunca br.funcionario (senha_web),
+# br.endereco_pessoa nem o resto do public. Descomentar e definir SUBSTITUI a lista padrao (valor vazio = lista vazia).
+#dbinspector.ai.allowed-tables=
+# Colunas que a IA nunca le (segredo, conta bancaria, contato, nascimento). Descomentar e definir SUBSTITUI a lista padrao (NAO deixe vazio: desliga o bloqueio):
+# padrao = senha_web,site_password,nfe_certificado_senha,birthdate,conta_num,conta_dv,cc_cpf_titular,cc_cpf_titular_2,email,phone
+#dbinspector.ai.blocked-columns=
+#dbinspector.ai.blocked-column-pattern=
+# Funcoes definidas no banco (fora de pg_catalog) sao bloqueadas: podem ler tabelas fora da lista por dentro.
+# Libere aqui as conhecidas e seguras (ex.: unaccent)
+dbinspector.ai.allowed-functions=
+dbinspector.ai.query-max-rows=200
+dbinspector.ai.preview-max-rows=50
+dbinspector.ai.pdf-preview-max-rows=200
+dbinspector.ai.queries-per-minute=30
+dbinspector.ai.max-concurrent-queries=1
+dbinspector.ai.max-plan-cost=1000000
+dbinspector.ai.query-timeout-seconds=60
+dbinspector.ai.explain-timeout-seconds=20
+dbinspector.ai.approval-max-rows=5000
+dbinspector.ai.approval-ttl-minutes=60
+dbinspector.ai.approval-max-ttl-minutes=1440
+
 CORS_EXTRA_ORIGIN=
