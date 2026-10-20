@@ -219,6 +219,35 @@ class AiJrxmlGuardTest {
         assertEquals(listOf("valor"), guard.fieldNames(template("\"x\"")))
     }
 
+    /** Grafico depende do modulo jasperreports-charts: sem ele o template nao compila. */
+    @Test
+    fun `grafico de barras por categoria passa na guarda e compila`() {
+        val jrxml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <jasperReport name="t" language="java" pageWidth="842" pageHeight="595" columnWidth="802" leftMargin="20" rightMargin="20" topMargin="20" bottomMargin="20">
+                <field name="dia" class="java.lang.Object"/>
+                <field name="desvio" class="java.lang.Object"/>
+                <summary height="200">
+                    <element kind="chart" chartType="stackedBar" x="0" y="0" width="802" height="200" evaluationTime="Report">
+                        <dataset kind="category">
+                            <incrementWhenExpression><![CDATA[${'$'}F{dia} != null]]></incrementWhenExpression>
+                            <series>
+                                <seriesExpression><![CDATA["Abaixo"]]></seriesExpression>
+                                <categoryExpression><![CDATA[String.valueOf(${'$'}F{dia})]]></categoryExpression>
+                                <valueExpression><![CDATA[java.lang.Double.valueOf(String.valueOf(${'$'}F{desvio})) < 0D ? java.lang.Double.valueOf(String.valueOf(${'$'}F{desvio})) : null]]></valueExpression>
+                            </series>
+                        </dataset>
+                        <plot orientation="Vertical" valueAxisTickLabelMask="#,##0.0">
+                            <seriesColor order="0" color="#C62828"/>
+                        </plot>
+                    </element>
+                </summary>
+            </jasperReport>
+        """.trimIndent()
+
+        assertAllPassAndCompile(listOf(jrxml to "grafico"))
+    }
+
     @Test
     fun `erro de compilacao vira problema legivel`() {
         val (_, problems) = guard.compile(template("\$F{inexistente}"))
