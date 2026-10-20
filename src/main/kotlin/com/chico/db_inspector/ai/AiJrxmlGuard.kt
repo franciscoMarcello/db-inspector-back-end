@@ -63,6 +63,8 @@ class AiJrxmlGuard {
         private val forbiddenAttributes = setOf(
             "scriptletClass", "resourceBundle", "formatFactoryClass", "incrementerFactoryClass",
             "hyperlinkType", "hyperlinkTarget", "linkType", "linkTarget", "lazy", "isLazy",
+            // o grafico carrega e instancia a classe indicada ao preencher o relatorio
+            "customizerClass",
             // caminho de arquivo de fonte: o servidor leria o arquivo indicado
             "pdfFontName", "pdfEncoding"
         )
