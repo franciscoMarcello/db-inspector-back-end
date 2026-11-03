@@ -1,9 +1,14 @@
 package com.chico.dbinspector.auth
 
+import com.chico.dbinspector.config.DbInspectorProperties
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
+import org.springframework.http.HttpStatus
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
+import org.springframework.web.server.ResponseStatusException
 import java.time.Instant
 import java.util.Optional
 import java.util.UUID
@@ -30,7 +35,8 @@ class AdminUserServiceTest {
             refreshTokenRepository = refreshTokenRepository,
             auditService = auditService,
             roleManagementService = roleManagementService,
-            passwordEncoder = BCryptPasswordEncoder()
+            passwordEncoder = BCryptPasswordEncoder(),
+            properties = DbInspectorProperties()
         )
 
         val userId = UUID.randomUUID()
@@ -83,7 +89,8 @@ class AdminUserServiceTest {
             refreshTokenRepository = refreshTokenRepository,
             auditService = auditService,
             roleManagementService = roleManagementService,
-            passwordEncoder = passwordEncoder
+            passwordEncoder = passwordEncoder,
+            properties = DbInspectorProperties()
         )
 
         val userId = UUID.randomUUID()
@@ -113,5 +120,57 @@ class AdminUserServiceTest {
         assertTrue(passwordEncoder.matches("Nova-senha-123", user.passwordHash))
         assertTrue(token.revoked)
         Mockito.verify(refreshTokenRepository).save(token)
+    }
+
+    @Test
+    fun `usuario do Keycloak nao tem perfil, nome nem senha alterados pela tela`() {
+        val fixture = Fixture()
+        val userId = UUID.randomUUID()
+        val user = AppUserEntity(id = userId, email = "ana@test.com", keycloakId = "kc-ana-0001", active = true)
+        Mockito.`when`(fixture.userRepository.findById(userId)).thenReturn(Optional.of(user))
+
+        val attempts = listOf<() -> Unit>(
+            { fixture.service.assignRole(userId, "ANALISTA") },
+            { fixture.service.removeRole(userId, "ANALISTA") },
+            { fixture.service.setUserName(userId, "Outro nome") },
+            { fixture.service.resetPassword(userId, "Nova-senha-123") }
+        )
+        attempts.forEach { attempt ->
+            val error = assertThrows(ResponseStatusException::class.java) { attempt() }
+            assertEquals(HttpStatus.CONFLICT, error.statusCode)
+        }
+        Mockito.verify(fixture.userRoleRepository, Mockito.never()).save(Mockito.any(UserRoleEntity::class.java))
+        Mockito.verify(fixture.userRepository, Mockito.never()).save(Mockito.any(AppUserEntity::class.java))
+    }
+
+    @Test
+    fun `com Keycloak ligado nao cria usuario com senha`() {
+        val fixture = Fixture(DbInspectorProperties().apply { keycloak.enabled = true })
+
+        val error = assertThrows(ResponseStatusException::class.java) {
+            fixture.service.createUser(
+                AdminCreateUserRequest(name = "Ana", email = "ana@test.com", password = "Senha-forte-123", roles = listOf("ANALISTA"))
+            )
+        }
+
+        assertEquals(HttpStatus.CONFLICT, error.statusCode)
+        Mockito.verifyNoInteractions(fixture.userRepository)
+    }
+
+    private class Fixture(properties: DbInspectorProperties = DbInspectorProperties()) {
+        val userRepository: AppUserRepository = Mockito.mock(AppUserRepository::class.java)
+        val userRoleRepository: UserRoleRepository = Mockito.mock(UserRoleRepository::class.java)
+        val service = AdminUserService(
+            userRepository = userRepository,
+            roleRepository = Mockito.mock(RoleRepository::class.java),
+            permissionRepository = Mockito.mock(PermissionRepository::class.java),
+            userRoleRepository = userRoleRepository,
+            rolePermissionRepository = Mockito.mock(RolePermissionRepository::class.java),
+            refreshTokenRepository = Mockito.mock(RefreshTokenRepository::class.java),
+            auditService = Mockito.mock(AdminAuditService::class.java),
+            roleManagementService = Mockito.mock(AdminRoleManagementService::class.java),
+            passwordEncoder = BCryptPasswordEncoder(),
+            properties = properties
+        )
     }
 }

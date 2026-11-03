@@ -28,6 +28,9 @@ class AppUserEntity(
     var email: String = "",
     @Column(name = "password_hash", nullable = false)
     var passwordHash: String = "",
+    /** `sub` do Keycloak. Usuario criado pelo login SSO fica com password_hash vazio: nao entra por senha. */
+    @Column(name = "keycloak_id", unique = true)
+    var keycloakId: String? = null,
     @Column(nullable = false)
     var active: Boolean = true,
     @CreationTimestamp

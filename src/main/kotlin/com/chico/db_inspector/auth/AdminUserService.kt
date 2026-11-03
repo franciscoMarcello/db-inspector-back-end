@@ -1,11 +1,14 @@
 package com.chico.dbinspector.auth
 
+import com.chico.dbinspector.config.DbInspectorProperties
 import jakarta.transaction.Transactional
 import org.springframework.http.HttpStatus
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
 import java.util.UUID
+
+private const val KEYCLOAK_ROLE_MESSAGE = "Perfis de quem entra pelo Keycloak sao atribuidos no console do Keycloak"
 
 @Service
 class AdminUserService(
@@ -17,7 +20,8 @@ class AdminUserService(
     private val refreshTokenRepository: RefreshTokenRepository,
     private val auditService: AdminAuditService,
     private val roleManagementService: AdminRoleManagementService,
-    private val passwordEncoder: PasswordEncoder
+    private val passwordEncoder: PasswordEncoder,
+    private val properties: DbInspectorProperties
 ) {
 
     fun listUsers(): List<AdminUserResponse> =
@@ -27,6 +31,12 @@ class AdminUserService(
 
     @Transactional
     fun createUser(request: AdminCreateUserRequest): AdminUserResponse {
+        if (!properties.localLoginEnabled()) {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Login local desativado: a pessoa entra pelo Keycloak e aparece aqui no primeiro acesso"
+            )
+        }
         val name = request.name.trim()
         require(name.isNotBlank()) { "Nome obrigatorio" }
         val email = request.email.trim().lowercase()
@@ -85,6 +95,7 @@ class AdminUserService(
     @Transactional
     fun setUserName(id: UUID, rawName: String): AdminUserResponse {
         val user = findUser(id)
+        requireLocalIdentity(user, "O nome vem do Keycloak: altere-o no console do Keycloak")
         val name = rawName.trim()
         require(name.isNotBlank()) { "Nome obrigatorio" }
         user.name = name
@@ -100,7 +111,9 @@ class AdminUserService(
 
     @Transactional
     fun resetPassword(id: UUID, rawPassword: String) {
+        requireLocalLogin(properties)
         val user = findUser(id)
+        requireLocalIdentity(user, "A senha e do Keycloak: redefina-a no console do Keycloak")
         val password = rawPassword.trim()
         PasswordPolicy.validateOrThrow(password)
 
@@ -121,6 +134,7 @@ class AdminUserService(
     @Transactional
     fun assignRole(userId: UUID, roleName: String): AdminUserResponse {
         val user = findUser(userId)
+        requireLocalIdentity(user, KEYCLOAK_ROLE_MESSAGE)
         val normalizedRole = roleName.trim().uppercase()
         require(normalizedRole.isNotBlank()) { "Role obrigatoria" }
         assignRoles(user, listOf(normalizedRole))
@@ -136,6 +150,7 @@ class AdminUserService(
     @Transactional
     fun removeRole(userId: UUID, roleName: String): AdminUserResponse {
         val user = findUser(userId)
+        requireLocalIdentity(user, KEYCLOAK_ROLE_MESSAGE)
         val normalizedRole = roleName.trim().uppercase()
         val link = userRoleRepository.findByUserIdAndRoleNameIgnoreCase(userId, normalizedRole).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Role nao vinculada ao usuario")
@@ -248,6 +263,11 @@ class AdminUserService(
         return normalized
     }
 
+    /** Usuario do Keycloak: nome, senha e perfis sao de la, e o proximo acesso sobrescreveria a mudanca. */
+    private fun requireLocalIdentity(user: AppUserEntity, message: String) {
+        if (user.keycloakId != null) throw ResponseStatusException(HttpStatus.CONFLICT, message)
+    }
+
     private fun findUser(id: UUID): AppUserEntity =
         userRepository.findById(id).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario nao encontrado")
@@ -269,6 +289,7 @@ class AdminUserService(
             email = user.email,
             active = user.active,
             roles = roles,
+            sso = user.keycloakId != null,
             createdAt = created.toEpochMilli(),
             updatedAt = updated.toEpochMilli()
         )

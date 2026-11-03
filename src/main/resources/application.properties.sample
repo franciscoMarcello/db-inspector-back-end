@@ -31,6 +31,22 @@ dbinspector.auth.jwt.access-ttl-minutes=15
 dbinspector.auth.refresh-ttl-days=7
 dbinspector.auth.bootstrap-admin.email=
 dbinspector.auth.bootstrap-admin.password=
+
+# Login pelo Keycloak (SSO). Ligado, e a UNICA forma de entrar: login com senha, refresh e redefinicao de
+# senha locais param, tokens locais ainda validos sao recusados e o front so mostra "Entrar com SSO".
+# Desligado (false), volta o login com e-mail e senha. O front le isso em GET /api/auth/config.
+dbinspector.keycloak.enabled=false
+dbinspector.keycloak.url=https://sso.gruporovema.com.br
+dbinspector.keycloak.realm=rovema
+dbinspector.keycloak.client-id=agroreports
+# Client com service account que cria/renomeia/exclui os perfis como roles do client acima e consulta os
+# perfis de quem criou um token de IA. realm-management: view-clients, manage-clients, view-users.
+# O secret vem de variavel de ambiente (DBINSPECTOR_KEYCLOAK_ADMIN_CLIENT_SECRET); nunca no arquivo.
+dbinspector.keycloak.admin.enabled=false
+dbinspector.keycloak.admin.client-id=agroreports-admin
+dbinspector.keycloak.admin.client-secret=${DBINSPECTOR_KEYCLOAK_ADMIN_CLIENT_SECRET:}
+dbinspector.keycloak.admin.timeout-ms=5000
+
 dbinspector.security.acl-default-deny=false
 dbinspector.security.login-max-attempts=5
 dbinspector.security.login-window-seconds=60
