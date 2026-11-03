@@ -33,11 +33,12 @@ class PasswordResetService(
 
     @Transactional
     fun requestReset(email: String) {
+        requireLocalLogin(props)
         val normalizedEmail = email.trim().lowercase()
         val user = userRepository.findByEmailIgnoreCase(normalizedEmail).orElse(null)
 
-        if (user == null || !user.active) {
-            log.info("Solicitacao de redefinicao de senha para email nao encontrado ou inativo: {}", normalizedEmail)
+        if (user == null || !user.active || user.keycloakId != null) {
+            log.info("Solicitacao de redefinicao de senha para email nao encontrado, inativo ou do Keycloak: {}", normalizedEmail)
             return
         }
 
@@ -68,8 +69,10 @@ class PasswordResetService(
         )
     }
 
-    @Transactional
+    // A recusa marca o token como usado antes de lancar o erro: isso nao pode ser desfeito junto.
+    @Transactional(dontRollbackOn = [ResponseStatusException::class])
     fun confirmReset(rawToken: String, newPassword: String) {
+        requireLocalLogin(props)
         PasswordPolicy.validateOrThrow(newPassword)
 
         val tokenHash = sha256Hex(rawToken.trim())
@@ -86,6 +89,12 @@ class PasswordResetService(
         val user = tokenEntity.user ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Token invalido ou expirado")
         if (!user.active) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Usuario inativo")
+        }
+        // Link pedido antes do vinculo com o Keycloak: a senha local nao vale mais para esta conta.
+        if (user.keycloakId != null) {
+            tokenEntity.used = true
+            passwordResetTokenRepository.save(tokenEntity)
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, SSO_ACCOUNT_MESSAGE)
         }
 
         user.passwordHash = passwordEncoder.encode(newPassword)

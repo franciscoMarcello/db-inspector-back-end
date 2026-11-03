@@ -7,11 +7,13 @@ import java.util.UUID
 
 interface AppUserRepository : JpaRepository<AppUserEntity, UUID> {
     fun findByEmailIgnoreCase(email: String): Optional<AppUserEntity>
+    fun findByKeycloakId(keycloakId: String): Optional<AppUserEntity>
 }
 
 interface RoleRepository : JpaRepository<RoleEntity, UUID> {
     fun findByNameIgnoreCase(name: String): Optional<RoleEntity>
     fun findAllByOrderByNameAsc(): List<RoleEntity>
+    fun findAllByNameIn(names: Collection<String>): List<RoleEntity>
 }
 
 interface PermissionRepository : JpaRepository<PermissionEntity, UUID> {
@@ -40,6 +42,8 @@ interface UserRoleRepository : JpaRepository<UserRoleEntity, UUID> {
     fun existsByUserIdAndRoleId(userId: UUID, roleId: UUID): Boolean
     fun existsByRoleId(roleId: UUID): Boolean
     fun findByUserIdAndRoleNameIgnoreCase(userId: UUID, roleName: String): Optional<UserRoleEntity>
+    fun findAllByUserId(userId: UUID): List<UserRoleEntity>
+    fun findAllByRoleId(roleId: UUID): List<UserRoleEntity>
 }
 
 interface RolePermissionRepository : JpaRepository<RolePermissionEntity, UUID> {
