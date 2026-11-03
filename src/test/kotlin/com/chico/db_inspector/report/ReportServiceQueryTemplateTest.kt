@@ -50,6 +50,41 @@ class ReportServiceQueryTemplateTest {
     }
 
     @Test
+    fun `deve impedir que valor de uma variavel vire placeholder de outra`() {
+        val variables = listOf(
+            ReportVariableEntity(key = "a", label = "A", type = "string", required = true, orderIndex = 0),
+            ReportVariableEntity(key = "b", label = "B", type = "string", required = true, orderIndex = 1)
+        )
+
+        val rendered = ReportQueryService().buildQueryWithParams(
+            "SELECT \"CardName\" FROM OCRD WHERE \"CardCode\" = :a AND \"CardName\" LIKE :b",
+            variables,
+            mapOf("a" to ":b", "b" to " OR 1=1 UNION SELECT \"USER_CODE\" FROM OUSR WHERE 1=")
+        )
+
+        assertEquals(
+            "SELECT \"CardName\" FROM OCRD WHERE \"CardCode\" = ':b' AND \"CardName\" LIKE ' OR 1=1 UNION SELECT \"USER_CODE\" FROM OUSR WHERE 1='",
+            rendered
+        )
+    }
+
+    @Test
+    fun `deve inserir valor com cifrao e barra sem alterar`() {
+        val variables = listOf(
+            ReportVariableEntity(key = "data", label = "Data", type = "string", required = true, orderIndex = 0),
+            ReportVariableEntity(key = "data_fim", label = "Fim", type = "string", required = true, orderIndex = 1)
+        )
+
+        val rendered = ReportQueryService().buildQueryWithParams(
+            "SELECT 1 WHERE x = :data AND y = :data_fim AND z = ::data",
+            variables,
+            mapOf("data" to "R$ 1\\2", "data_fim" to "fim")
+        )
+
+        assertEquals("SELECT 1 WHERE x = 'R$ 1\\2' AND y = 'fim' AND z = ::data", rendered)
+    }
+
+    @Test
     fun `buildQueryWithParams should fail for unknown params`() {
         val service = createService()
         val variables = listOf(

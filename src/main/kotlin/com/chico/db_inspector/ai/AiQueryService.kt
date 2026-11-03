@@ -5,7 +5,9 @@ import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
+import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import org.springframework.web.server.ResponseStatusException
 import java.time.Duration
 
 /**
@@ -92,25 +94,38 @@ class AiQueryService(
         val maxRows = properties.ai.queryMaxRows
         val requested = request.limite ?: maxRows
         val limit = requested.coerceIn(1, maxRows)
+        // Toda tentativa fica na auditoria com o SQL inteiro (por isso o teto de tamanho), inclusive recusa e erro.
+        fun audit(resultado: String, details: Map<String, Any?>) = auditService.log(
+            action = "AI_QUERY_SAP",
+            targetType = "AI_TOKEN",
+            targetId = token.tokenId.toString(),
+            details = mapOf("token" to token.tokenName, "sql" to sql.take(SAP_SQL_MAX_CHARS), "resultado" to resultado) + details
+        )
+        if (sql.length > SAP_SQL_MAX_CHARS) {
+            audit("recusada", mapOf("motivo" to "SQL com ${sql.length} caracteres"))
+            throw AiRuleException(
+                HttpStatus.BAD_REQUEST,
+                "sql_grande",
+                "SQL do SAP limitado a $SAP_SQL_MAX_CHARS caracteres",
+                "Simplifique a consulta ou divida em duas."
+            )
+        }
 
         return limiter.run(token.tokenId) {
             val start = System.nanoTime()
             // Uma linha a mais so para saber se cortou.
-            val result = hana.execLimited(sql, limit + 1, properties.ai.queryTimeoutSeconds.toInt())
+            val result = try {
+                hana.execLimited(sql, limit + 1, properties.ai.queryTimeoutSeconds.toInt())
+            } catch (ex: IllegalArgumentException) {
+                audit("recusada", mapOf("motivo" to ex.message))
+                throw ex
+            } catch (ex: ResponseStatusException) {
+                audit("erro", mapOf("motivo" to ex.reason))
+                throw ex
+            }
             val elapsedMs = (System.nanoTime() - start) / 1_000_000
             val truncated = result.rows.size > limit
-
-            auditService.log(
-                action = "AI_QUERY_SAP",
-                targetType = "AI_TOKEN",
-                targetId = token.tokenId.toString(),
-                details = mapOf(
-                    "token" to token.tokenName,
-                    "sql" to sql.take(4_000),
-                    "rows" to minOf(result.rows.size, limit),
-                    "elapsedMs" to elapsedMs
-                )
-            )
+            audit("ok", mapOf("rows" to minOf(result.rows.size, limit), "elapsedMs" to elapsedMs))
 
             AiQueryResponse(
                 colunas = result.columns,
@@ -145,6 +160,9 @@ class AiQueryService(
     }
 
 }
+
+/** Teto do SQL da IA no SAP: a auditoria guarda o texto inteiro. */
+internal const val SAP_SQL_MAX_CHARS = 4_000
 
 /**
  * Colunas e linhas do retorno do sql/exec. Sem linhas, as colunas vem de `fields` (formato do

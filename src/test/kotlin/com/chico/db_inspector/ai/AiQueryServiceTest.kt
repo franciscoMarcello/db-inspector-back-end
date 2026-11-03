@@ -149,6 +149,29 @@ class AiQueryServiceTest {
         Mockito.verifyNoInteractions(hana)
     }
 
+    @Test
+    fun `consulta no SAP recusada tambem vai para a auditoria`() {
+        Mockito.`when`(hana.execLimited(Mockito.anyString(), Mockito.anyInt(), Mockito.anyInt()))
+            .thenThrow(IllegalArgumentException("SQL do SAP nao pode ler senha"))
+
+        assertThrows<IllegalArgumentException> { service.querySap(AiQueryRequest("SELECT \"PASSWORD\" FROM OUSR")) }
+
+        Mockito.verify(auditService).log(
+            Mockito.eq("AI_QUERY_SAP") ?: "", Mockito.eq("AI_TOKEN") ?: "", Mockito.anyString(),
+            Mockito.argThat<Map<String, Any?>> { it?.get("resultado") == "recusada" && it?.get("sql") == "SELECT \"PASSWORD\" FROM OUSR" } ?: emptyMap()
+        )
+    }
+
+    @Test
+    fun `SQL do SAP acima de 4000 caracteres e recusado antes do banco`() {
+        val sql = "SELECT '" + "x".repeat(4_000) + "' AS p FROM DUMMY"
+
+        val ex = assertThrows<AiRuleException> { service.querySap(AiQueryRequest(sql)) }
+
+        assertEquals("sql_grande", ex.regra)
+        Mockito.verifyNoInteractions(hana)
+    }
+
     private fun plan(cost: Double) = listOf(
         mapOf("Plan" to mapOf("Total Cost" to cost, "Schema" to "agricola", "Relation Name" to "colheita"))
     )

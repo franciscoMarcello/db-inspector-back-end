@@ -32,6 +32,19 @@ object HanaReadOnlySqlValidator {
 
     fun isSensitiveColumn(name: String): Boolean = sensitiveName.matches(name)
 
+    // Dentro de um unico SELECT, so isto tem efeito no HANA (FOR UPDATE ja cai no ReadOnlySqlValidator).
+    private val sideEffectWords = Regex("\\b(nextval|lock|into|call)\\b", RegexOption.IGNORE_CASE)
+
+    /**
+     * Regra das telas de pessoa (/compare, teste de conexao, e-mail): somente leitura e sem efeito colateral.
+     * Mais branda que [validate] para nao recusar SQL publicado com comentario, `*` ou palavra comum em texto.
+     */
+    fun sideEffectProblem(sql: String): String? {
+        ReadOnlySqlValidator.validate(sql)?.let { return it }
+        sideEffectWords.find(sql)?.let { return "SQL do SAP deve ser somente leitura: '${it.value}' nao e permitido" }
+        return null
+    }
+
     fun validate(sql: String): String? {
         ReadOnlySqlValidator.validate(sql)?.let { return it }
         // Comentario poderia esconder trecho do leitor humano da auditoria; nao ha motivo para a IA usar.

@@ -1,12 +1,12 @@
 package com.chico.dbinspector.service
 
 import com.chico.dbinspector.util.HanaReadOnlySqlValidator
-import com.chico.dbinspector.util.ReadOnlySqlValidator
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.dao.DataAccessException
 import org.springframework.http.HttpStatus
+import org.springframework.jdbc.core.ColumnMapRowMapper
 import org.springframework.jdbc.core.ConnectionCallback
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.core.PreparedStatementCallback
@@ -14,6 +14,9 @@ import org.springframework.jdbc.core.PreparedStatementCreator
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
 import java.sql.Connection
+import java.sql.ResultSet
+import java.sql.SQLException
+import java.sql.SQLTimeoutException
 import java.sql.Types
 
 @Service
@@ -34,19 +37,27 @@ class HanaQueryService(
         val type: String
     )
 
+    /**
+     * Telas de pessoa (/compare, teste de conexao, e-mail). Barra o que tem efeito colateral dentro de um SELECT
+     * no HANA e roda em transacao sempre desfeita. Linhas como o queryForList de antes (chave sem diferenciar
+     * maiusculas), sem limite de linhas nem timeout, para nao mudar relatorio e e-mail existentes.
+     */
     fun exec(sql: String): QueryResult {
-        if (jdbcTemplate == null) {
-            throw ResponseStatusException(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                "Conexao com SAP HANA nao configurada"
-            )
-        }
-        ReadOnlySqlValidator.requireReadOnly(sql)
+        HanaReadOnlySqlValidator.sideEffectProblem(sql)?.let { throw IllegalArgumentException(it) }
+        val template = requireTemplate()
         return try {
-            val rawRows: List<Map<String, Any?>> = jdbcTemplate.queryForList(sql)
-                .map { row -> row.mapValues { (_, v) -> v } }
-            val columns = rawRows.firstOrNull()?.keys?.toList() ?: emptyList()
-            QueryResult(columns = columns, rows = rawRows)
+            template.execute(ConnectionCallback { con ->
+                inRolledBackTransaction(con) {
+                    con.prepareStatement(sql).use { ps ->
+                        ps.executeQuery().use { rs ->
+                            val mapper = ColumnMapRowMapper()
+                            val rows = mutableListOf<Map<String, Any?>>()
+                            while (rs.next()) rows += mapper.mapRow(rs, rows.size)
+                            QueryResult(labels(rs), rows)
+                        }
+                    }
+                }
+            }) ?: QueryResult(emptyList(), emptyList())
         } catch (ex: DataAccessException) {
             log.error("Erro ao executar query no SAP HANA: {}", ex.message)
             throw ResponseStatusException(
@@ -57,53 +68,77 @@ class HanaQueryService(
     }
 
     /**
-     * Consulta da IA: validador mais rigido do HANA, corte em [maxRows] e [timeoutSeconds] no proprio statement,
-     * e transacao sempre desfeita no fim, para nada que escape do validador ficar gravado. Devolve a mensagem
-     * do HANA para a IA corrigir o SQL. Colunas vem do metadata, mesmo sem linhas.
+     * Consulta da IA: validador mais rigido do HANA (somente leitura, sem senha/chave/token, sem `*`), corte em
+     * [maxRows] e [timeoutSeconds] no proprio statement, transacao sempre desfeita e coluna sensivel mascarada.
+     * O erro volta limpo para a IA corrigir o SQL, sem endereco de conexao.
      */
     fun execLimited(sql: String, maxRows: Int, timeoutSeconds: Int): QueryResult {
         HanaReadOnlySqlValidator.requireReadOnly(sql)
-        val template = jdbcTemplate ?: throw ResponseStatusException(
-            HttpStatus.SERVICE_UNAVAILABLE,
-            "Conexao com SAP HANA nao configurada"
-        )
+        val template = requireTemplate()
         return try {
-            template.execute(ConnectionCallback { con -> readInRolledBackTransaction(con, sql, maxRows, timeoutSeconds) })
-                ?: QueryResult(emptyList(), emptyList())
+            template.execute(ConnectionCallback { con ->
+                inRolledBackTransaction(con) {
+                    con.prepareStatement(sql).use { ps ->
+                        ps.maxRows = maxRows
+                        ps.queryTimeout = timeoutSeconds
+                        ps.executeQuery().use { rs ->
+                            val columns = labels(rs)
+                            val masked = columns.map { HanaReadOnlySqlValidator.isSensitiveColumn(it) }
+                            val rows = mutableListOf<Map<String, Any?>>()
+                            while (rs.next()) {
+                                rows += columns.withIndex().associate { (i, name) ->
+                                    name to if (masked[i]) "***" else readable(rs.getObject(i + 1))
+                                }
+                            }
+                            QueryResult(columns, rows)
+                        }
+                    }
+                }
+            }) ?: QueryResult(emptyList(), emptyList())
         } catch (ex: DataAccessException) {
             log.warn("Erro na consulta da IA no SAP HANA: {}", ex.message)
-            throw ResponseStatusException(
-                HttpStatus.BAD_GATEWAY,
-                "Erro no SAP HANA: ${ex.mostSpecificCause.message?.take(500)}"
-            )
+            throw ResponseStatusException(HttpStatus.BAD_GATEWAY, aiErrorMessage(ex))
         }
     }
 
-    private fun readInRolledBackTransaction(con: Connection, sql: String, maxRows: Int, timeoutSeconds: Int): QueryResult {
+    private fun requireTemplate(): JdbcTemplate = jdbcTemplate ?: throw ResponseStatusException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "Conexao com SAP HANA nao configurada"
+    )
+
+    private fun <T> inRolledBackTransaction(con: Connection, block: () -> T): T {
         val autoCommit = con.autoCommit
         con.autoCommit = false
         try {
-            return con.prepareStatement(sql).use { ps ->
-                ps.maxRows = maxRows
-                ps.queryTimeout = timeoutSeconds
-                ps.executeQuery().use { rs ->
-                    val meta = rs.metaData
-                    val columns = (1..meta.columnCount).map { meta.getColumnLabel(it) }
-                    val masked = columns.map { HanaReadOnlySqlValidator.isSensitiveColumn(it) }
-                    val rows = mutableListOf<Map<String, Any?>>()
-                    while (rs.next()) {
-                        rows += columns.withIndex().associate { (i, name) ->
-                            name to if (masked[i]) "***" else readable(rs.getObject(i + 1))
-                        }
-                    }
-                    QueryResult(columns, rows)
-                }
-            }
+            return block()
         } finally {
             con.rollback()
             con.autoCommit = autoCommit
         }
     }
+
+    private fun labels(rs: ResultSet): List<String> = (1..rs.metaData.columnCount).map { rs.metaData.getColumnLabel(it) }
+
+    /**
+     * Erro de SQL (sintaxe, coluna, tipo) volta com o texto do HANA para a IA corrigir. Tabela inexistente e
+     * falta de permissao viram a mesma mensagem, para nao revelar o que existe; falha de conexao nao mostra nada.
+     */
+    private fun aiErrorMessage(ex: DataAccessException): String {
+        val cause = ex.mostSpecificCause
+        val code = (cause as? SQLException)?.errorCode ?: 0
+        return when {
+            cause is SQLTimeoutException -> "Consulta passou do tempo limite. Filtre mais ou agregue."
+            code in NOT_FOUND_OR_DENIED -> "Tabela, schema ou objeto inexistente, ou sem permissao de leitura"
+            code in 1..9_999 -> "Erro no SAP HANA [$code]: " + cleanMessage(cause.message)
+            else -> "Erro no SAP HANA (conexao ou servidor). Tente de novo; se repetir, avise a pessoa."
+        }
+    }
+
+    private fun cleanMessage(message: String?): String = message.orEmpty()
+        .replace(Regex("^SAP DBTech JDBC: \\[\\d+]:\\s*"), "")
+        .replace(Regex("jdbc:\\S+"), "[conexao]")
+        .replace(Regex("\\b\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?\\b"), "[endereco]")
+        .take(300)
 
     // NCLOB/BLOB do B1 nao viram JSON; texto longo e cortado.
     private fun readable(value: Any?): Any? = when (value) {
@@ -120,7 +155,7 @@ class HanaQueryService(
                 "Conexao com SAP HANA nao configurada"
             )
         }
-        ReadOnlySqlValidator.requireReadOnly(sql)
+        HanaReadOnlySqlValidator.sideEffectProblem(sql)?.let { throw IllegalArgumentException(it) }
         val metadataQuery = "SELECT * FROM (${sql.trim().trimEnd(';')}) dbi_hana_meta WHERE 1 = 0"
         return try {
             jdbcTemplate.execute(
@@ -163,5 +198,10 @@ class HanaQueryService(
                 else -> "string"
             }
         }
+    }
+
+    private companion object {
+        /** 258 sem privilegio, 259 tabela inexistente, 362 schema inexistente. */
+        val NOT_FOUND_OR_DENIED = setOf(258, 259, 362)
     }
 }
