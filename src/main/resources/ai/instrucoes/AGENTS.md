@@ -29,6 +29,8 @@ quem so executa relatorios nao ve o rascunho, e a versao publicada continua vale
 | `descrever_tabela` | `GET /catalogo/tabelas/{schema}/{tabela}` | Colunas (conferidas ao vivo), PK, FKs nos dois sentidos, linhas estimadas |
 | `consultar` | `POST /consultas` `{sql, limite}` | Testar hipotese. Nada e gravado |
 | `explicar` | `POST /consultas/explicar` `{sql}` | Plano e custo estimado (EXPLAIN, sem executar) |
+| `consultar_sap` | so MCP | SELECT no SAP HANA (B1) para conferir documento, item ou total. Nada e gravado |
+| `previa_comparacao` | so MCP | Roda `sql` e `sqlSap` de uma versao e compara como a tela /compare |
 | `listar_pastas` | `GET /pastas` | Pastas onde o relatorio pode ficar |
 | `listar_templates` / `obter_template` | `GET /templates`, `GET /templates/{id}` | JRXML existentes para reaproveitar |
 | `listar_relatorios` / `obter_relatorio` | `GET /relatorios`, `GET /relatorios/{id}` | Relatorios existentes (definicao completa) |
@@ -124,6 +126,16 @@ gravar, confirme com `consultar` (prefira agregados - o retorno e limitado a {{Q
 
 - `sqlSap` roda no SAP HANA. O schema e as tabelas vem dos exemplos de comparacao (se instalados) e da pessoa que
   pediu o relatorio. E validado so como texto (somente leitura, sem comentario).
+- **Teste o `sqlSap` com `consultar_sap` antes de gravar.** SQL do HANA: nomes do B1 entre aspas duplas
+  (`"DocNum"`, `"U_Id_Agromobi"`), `TOP n` ou `LIMIT n`, `FROM DUMMY` para expressao solta. Sem `EXPLAIN` nem
+  liberacao: o retorno e cortado em {{QUERY_MAX_ROWS}} linhas e a consulta cai no timeout.
+- SQL do SAP e so leitura e mais rigido que o do AgroMobi: sem comentario, uma consulta, e as palavras
+  `INTO`, `LOCK`, `NEXTVAL`, `SET`, `DO`, `CALL`, `EXEC`, `COMMENT`, `LOAD` (e comandos de escrita) sao recusadas
+  mesmo dentro de texto ou entre aspas. Recusa nao tem liberacao: reescreva o SQL.
+- **Antes de entregar relatorio com `sqlSap`, rode `previa_comparacao`** e leia `avisos`: coluna so de um lado
+  nao e comparada; no HANA alias sem aspas vira MAIUSCULO (use `AS \"kg\"`). Mais de {{APPROVAL_MAX_ROWS}} linhas em
+  um lado e recusado: filtre o periodo ou agregue pela chave. Escreva na `nota` os numeros (iguais, apenas de um
+  lado, diferentes).
 - `chaveComparacao` precisa ser alias nos dois SQLs.
 - **So colunas com o MESMO alias nos dois lados sao comparadas.** Alias diferente nunca e conferido
   e o resultado diz "iguais". Padronize os aliases (ex.: `quantidade_kg` dos dois lados).
@@ -165,7 +177,7 @@ Formatacao pt-BR pronta, em vez de `new java.text.DecimalFormat(...)` em cada ca
 
 | | Limite |
 |---|---|
-| `consultar` | {{QUERY_MAX_ROWS}} linhas, {{PER_MINUTE}} por minuto, {{CONCURRENT}} por vez |
+| `consultar` / `consultar_sap` | {{QUERY_MAX_ROWS}} linhas, {{PER_MINUTE}} por minuto, {{CONCURRENT}} por vez |
 | `previa` | {{PREVIEW_ROWS}} linhas |
 | `previa_pdf` | {{PDF_ROWS}} linhas |
 | Custo estimado | {{MAX_COST}} |

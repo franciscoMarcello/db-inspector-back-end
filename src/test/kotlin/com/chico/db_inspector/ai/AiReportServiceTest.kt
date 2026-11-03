@@ -1,6 +1,8 @@
 package com.chico.dbinspector.ai
 
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.report.ReportComparisonService
+import com.chico.dbinspector.report.ReportEntity
 import com.chico.dbinspector.report.ReportFolderService
 import com.chico.dbinspector.report.ReportJasperTemplateRepository
 import com.chico.dbinspector.report.ReportJasperTemplateService
@@ -11,6 +13,7 @@ import com.chico.dbinspector.report.ReportVariableService
 import com.chico.dbinspector.report.ReportVersionContent
 import com.chico.dbinspector.report.ReportVersionResponse
 import com.chico.dbinspector.report.ReportVersionService
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -27,6 +30,7 @@ class AiReportServiceTest {
 
     private val sqlExecClient = Mockito.mock(SqlExecClient::class.java)
     private val versionService = Mockito.mock(ReportVersionService::class.java)
+    private val hana = Mockito.mock(HanaQueryService::class.java)
     private val properties = DbInspectorProperties()
     private val guard = AiSqlGuard(sqlExecClient, properties, jacksonObjectMapper())
     private val service = AiReportService(
@@ -43,12 +47,15 @@ class AiReportServiceTest {
         limiter = AiQueryLimiter(properties),
         approvals = Mockito.mock(AiApprovalService::class.java),
         sqlExecClient = sqlExecClient,
-        properties = properties
+        properties = properties,
+        hana = hana,
+        comparisonService = ReportComparisonService()
     )
     private val ctx = UpstreamContext("https://api.example.com/sql/exec/", "Bearer x")
     private val executed = mutableListOf<String>()
     private var columns = listOf("fazenda", "kg")
     private var planSchema = "agricola"
+    private var dataRows: List<Map<String, Any?>> = emptyList()
 
     @BeforeEach
     fun setup() {
@@ -60,6 +67,7 @@ class AiReportServiceTest {
                     "data" to listOf(mapOf("QUERY PLAN" to listOf(mapOf("Plan" to mapOf("Total Cost" to 10.0, "Schema" to planSchema, "Relation Name" to "colheita")))))
                 )
                 query.contains("ai_opcoes") -> mapOf("data" to emptyList<Any>(), "fields" to listOf(mapOf("name" to "valor"), mapOf("name" to "descricao")))
+                query.contains("ai_comparacao") -> mapOf("data" to dataRows, "fields" to columns.map { mapOf("name" to it) })
                 else -> mapOf("data" to emptyList<Any>(), "fields" to columns.map { mapOf("name" to it) })
             }
         }
@@ -201,4 +209,75 @@ class AiReportServiceTest {
         Mockito.any(Duration::class.java)
         return Duration.ZERO
     }
+
+    private fun asAiToken(vararg authorities: String) {
+        val principal = com.chico.dbinspector.auth.AuthUserPrincipal(java.util.UUID.randomUUID(), "IA: t", "ana@example.com", "", true, authorities.toList())
+        org.springframework.security.core.context.SecurityContextHolder.getContext().authentication =
+            org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null, principal.authorities).apply {
+                details = AiTokenAuthenticationDetails(java.util.UUID.randomUUID(), "t")
+            }
+    }
+
+    private fun comparisonReport(id: java.util.UUID, sqlSap: String?) {
+        Mockito.`when`(versionService.transientReport(id, 2)).thenReturn(
+            ReportEntity(
+                id = id,
+                name = "Saidas x OIGE",
+                sql = "SELECT c.id AS doc, c.peso_real AS kg FROM agricola.colheita c",
+                secondSql = sqlSap,
+                comparisonKey = "doc"
+            )
+        )
+    }
+
+    @Test
+    fun `previa de comparacao confere os dois lados e avisa alias que so difere em maiusculas`() {
+        asAiToken("REPORT_RUN")
+        try {
+            val id = java.util.UUID.randomUUID()
+            comparisonReport(id, "SELECT \"U_Id_Agromobi\" AS \"doc\", \"Quantity\" AS KG FROM IGE1")
+            columns = listOf("doc", "kg")
+            dataRows = listOf(mapOf("doc" to "1", "kg" to 10), mapOf("doc" to "2", "kg" to 20))
+            Mockito.`when`(hana.execLimited(Mockito.anyString(), Mockito.anyInt(), Mockito.anyInt())).thenReturn(
+                HanaQueryService.QueryResult(listOf("doc", "KG"), listOf(mapOf("doc" to "1", "KG" to 10), mapOf("doc" to "3", "KG" to 30)))
+            )
+
+            val result = service.compare(id, 2, AiPreviewRequest(), ctx)
+
+            assertEquals(1, result.iguais)
+            assertEquals(1, result.apenasAgromobi)
+            assertEquals(1, result.apenasSap)
+            assertEquals(emptyList<String>(), result.colunasComparadas)
+            assertEquals(listOf("kg"), result.colunasSoNoAgromobi)
+            assertTrue(result.avisos.any { it.contains("MAIUSCULO") }, result.avisos.toString())
+            assertTrue(executed.any { it.contains("ai_comparacao LIMIT") })
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext()
+        }
+    }
+
+    @Test
+    fun `previa de comparacao sem token de IA nao chega ao SAP`() {
+        val principal = com.chico.dbinspector.auth.AuthUserPrincipal(java.util.UUID.randomUUID(), "Ana", "ana@example.com", "", true, listOf("REPORT_RUN"))
+        org.springframework.security.core.context.SecurityContextHolder.getContext().authentication =
+            org.springframework.security.authentication.UsernamePasswordAuthenticationToken(principal, null, principal.authorities)
+        try {
+            val ex = assertThrows<AiRuleException> { service.compare(java.util.UUID.randomUUID(), 2, AiPreviewRequest(), ctx) }
+
+            assertEquals("so_token_ia", ex.regra)
+            Mockito.verifyNoInteractions(hana)
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext()
+        }
+    }
+
+    @Test
+    fun `sqlSap com escrita escondida reprova a definicao`() {
+        val bad = definition().copy(sqlSap = "SELECT * FROM OIGE FOR SHARE LOCK")
+
+        val result = service.validate(AiReportValidationRequest(bad, mapOf("data_inicio" to "2025-03-01")), ctx)
+
+        assertTrue(result.problemas.any { it.caminho == "sqlSap" && it.regra == "sap_somente_leitura" }, result.problemas.toString())
+    }
+
 }

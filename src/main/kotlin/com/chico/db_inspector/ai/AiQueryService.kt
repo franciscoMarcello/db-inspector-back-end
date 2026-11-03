@@ -2,6 +2,7 @@ package com.chico.dbinspector.ai
 
 import com.chico.dbinspector.auth.AdminAuditService
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
 import org.springframework.stereotype.Service
@@ -18,7 +19,8 @@ class AiQueryService(
     private val approvals: AiApprovalService,
     private val sqlExecClient: SqlExecClient,
     private val auditService: AdminAuditService,
-    private val properties: DbInspectorProperties
+    private val properties: DbInspectorProperties,
+    private val hana: HanaQueryService
 ) {
     fun query(request: AiQueryRequest, ctx: UpstreamContext): AiQueryResponse {
         val sql = request.sql.trim().removeSuffix(";").trim()
@@ -73,6 +75,54 @@ class AiQueryService(
                 liberacaoId = approval?.id?.toString(),
                 aviso = when {
                     requested > maxRows -> "Pedido de $requested linhas reduzido para $maxRows. Para mais, solicite liberacao."
+                    truncated -> "Resultado cortado em $limit linhas. Prefira agregar (GROUP BY) a trazer linhas."
+                    else -> null
+                }
+            )
+        }
+    }
+
+    /**
+     * Consulta exploratoria no SAP HANA, so para token de IA. Sem EXPLAIN nem liberacao: o freio e o limite de
+     * linhas, o timeout e o usuario de leitura da conexao; qualquer tabela do SAP pode ser lida.
+     */
+    fun querySap(request: AiQueryRequest): AiQueryResponse {
+        val token = requireAiToken()
+        val sql = request.sql.trim().removeSuffix(";").trim()
+        val maxRows = properties.ai.queryMaxRows
+        val requested = request.limite ?: maxRows
+        val limit = requested.coerceIn(1, maxRows)
+
+        return limiter.run(token.tokenId) {
+            val start = System.nanoTime()
+            // Uma linha a mais so para saber se cortou.
+            val result = hana.execLimited(sql, limit + 1, properties.ai.queryTimeoutSeconds.toInt())
+            val elapsedMs = (System.nanoTime() - start) / 1_000_000
+            val truncated = result.rows.size > limit
+
+            auditService.log(
+                action = "AI_QUERY_SAP",
+                targetType = "AI_TOKEN",
+                targetId = token.tokenId.toString(),
+                details = mapOf(
+                    "token" to token.tokenName,
+                    "sql" to sql.take(4_000),
+                    "rows" to minOf(result.rows.size, limit),
+                    "elapsedMs" to elapsedMs
+                )
+            )
+
+            AiQueryResponse(
+                colunas = result.columns,
+                linhas = result.rows.take(limit),
+                quantidade = minOf(result.rows.size, limit),
+                truncado = truncated,
+                limiteAplicado = limit,
+                custoEstimado = null,
+                tempoMs = elapsedMs,
+                liberacaoId = null,
+                aviso = when {
+                    requested > maxRows -> "Pedido de $requested linhas reduzido para $maxRows."
                     truncated -> "Resultado cortado em $limit linhas. Prefira agregar (GROUP BY) a trazer linhas."
                     else -> null
                 }
