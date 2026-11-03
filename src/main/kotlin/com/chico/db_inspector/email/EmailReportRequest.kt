@@ -44,6 +44,15 @@ data class EmailReportRequest(
     @field:Size(max = 128)
     val comparisonKey: String? = null,
     val comparisonTolerances: Map<String, Double> = emptyMap(),
+    val comparisonTolerancePercents: Map<String, Double> = emptyMap(),
+    /** Whitelist de colunas comparadas. Vazio compara a uniao das colunas das duas origens. */
+    val comparisonColumns: List<String> = emptyList(),
+    val comparisonIgnoreColumns: List<String> = emptyList(),
+    @field:Size(max = 128)
+    val comparisonGroupBy: String? = null,
+    @field:Size(max = 128)
+    val comparisonValueColumn: String? = null,
+    val comparisonTopN: Int? = 10,
     val sendOnlyIfDifferent: Boolean? = true,
 
     /** Time in HH:mm (e.g. "08:30") for recurring schedule. */

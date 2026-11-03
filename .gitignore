@@ -41,3 +41,8 @@ out/
 
 ### Kotlin ###
 .kotlin
+
+### Contexto do banco para IA (estrutura e regras de negocio: ficam fora do git) ###
+/src/main/resources/ai/catalogo.json
+/src/main/resources/ai/instrucoes/glossario/
+/src/main/resources/ai/instrucoes/exemplos/

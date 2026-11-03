@@ -26,6 +26,9 @@ class ReportJasperTemplateEntity(
     var jrxml: String = "",
     @Column(nullable = false)
     var archived: Boolean = false,
+    // Relatorio para o qual o template foi criado ao gravar uma versao; nulo = criado na tela de templates.
+    @Column(name = "origin_report_id")
+    var originReportId: UUID? = null,
     @OneToMany(mappedBy = "jasperTemplate", fetch = jakarta.persistence.FetchType.LAZY)
     var reports: MutableList<ReportEntity> = mutableListOf(),
     @CreationTimestamp

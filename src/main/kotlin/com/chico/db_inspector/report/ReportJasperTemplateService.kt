@@ -3,13 +3,15 @@ package com.chico.dbinspector.report
 import org.springframework.data.domain.Sort
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 import java.util.UUID
 
 @Service
 class ReportJasperTemplateService(
     private val repository: ReportJasperTemplateRepository,
-    private val reportRepository: ReportRepository
+    private val reportRepository: ReportRepository,
+    private val versionService: ReportVersionService
 ) {
     fun list(): List<JasperTemplateResponse> =
         repository.findAll(Sort.by(Sort.Direction.ASC, "name"))
@@ -38,10 +40,13 @@ class ReportJasperTemplateService(
         return repository.save(entity).toResponse()
     }
 
+    @Transactional
     fun update(id: UUID, request: JasperTemplateRequest): JasperTemplateResponse {
-        val entity = repository.findById(id).orElseThrow {
-            ResponseStatusException(HttpStatus.NOT_FOUND, "Template Jasper nao encontrado")
-        }
+        // Mesma ordem de todos os caminhos (trava de escrita -> linhas): sem deadlock com edicao de relatorio.
+        versionService.lockWrites()
+        // Trava antes de ler: nenhum relatorio e vinculado a este template durante a edicao e o historico.
+        val entity = repository.lockById(id)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Template Jasper nao encontrado")
 
         val name = request.name.trim()
         val jrxml = request.jrxml.trim()
@@ -51,11 +56,16 @@ class ReportJasperTemplateService(
             throw ResponseStatusException(HttpStatus.CONFLICT, "Ja existe template com esse nome")
         }
 
+        val previousJrxml = entity.jrxml
         entity.name = name
         entity.description = request.description?.trim().takeUnless { it.isNullOrBlank() }
         entity.jrxml = jrxml
         request.archived?.let { entity.archived = it }
-        return repository.save(entity).toResponse()
+        val saved = repository.save(entity)
+        if (previousJrxml.trim() != jrxml) {
+            versionService.recordTemplateChange(id, previousJrxml, name)
+        }
+        return saved.toResponse()
     }
 
     fun delete(id: UUID) {

@@ -8,6 +8,8 @@ import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.web.bind.annotation.*
+import org.springframework.web.server.ResponseStatusException
+import org.springframework.http.HttpStatus
 
 @RestController
 @RequestMapping("/api/db")
@@ -15,6 +17,16 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     companion object {
         private const val DEFAULT_PAGE_SIZE = 200
         private const val MAX_PAGE_SIZE = 1_000
+
+        /** Os nomes vao para dentro do SQL de metadados: so identificador simples passa. */
+        private val identifierRegex = Regex("^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
+
+        internal fun requireIdentifier(value: String, label: String): String {
+            if (!identifierRegex.matches(value)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome de $label invalido")
+            }
+            return value
+        }
     }
 
     @GetMapping("/schemas", produces = [MediaType.APPLICATION_JSON_VALUE])
@@ -32,6 +44,7 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     @GetMapping("/{schema}/tables", produces = [MediaType.APPLICATION_JSON_VALUE])
     @PreAuthorize("hasAuthority('SQL_METADATA_READ')")
     fun listTables(@PathVariable schema: String, ctx: UpstreamContext): Any {
+        requireIdentifier(schema, "schema")
         val query = """
             SELECT table_name
             FROM information_schema.tables
@@ -45,6 +58,8 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     @GetMapping("/{schema}/{table}/details", produces = [MediaType.APPLICATION_JSON_VALUE])
     @PreAuthorize("hasAuthority('SQL_METADATA_READ')")
     fun tableDetails(@PathVariable schema: String, @PathVariable table: String, ctx: UpstreamContext): Any {
+        requireIdentifier(schema, "schema")
+        requireIdentifier(table, "tabela")
         val query = """
             WITH cols AS (
                 SELECT
@@ -94,6 +109,8 @@ class SqlMetadataController(private val sql: SqlExecClient) {
     @GetMapping("/{schema}/{table}/relations", produces = [MediaType.APPLICATION_JSON_VALUE])
     @PreAuthorize("hasAuthority('SQL_METADATA_READ')")
     fun tableRelations(@PathVariable schema: String, @PathVariable table: String, ctx: UpstreamContext): Any {
+        requireIdentifier(schema, "schema")
+        requireIdentifier(table, "tabela")
         val query = """
             SELECT
                 CASE WHEN src.relname = '${table}' THEN 'OUTGOING'

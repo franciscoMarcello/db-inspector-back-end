@@ -35,6 +35,9 @@ class ReportEntity(
     var comparisonKey: String? = null,
     @Column(nullable = false)
     var archived: Boolean = false,
+    // Relatorio que nunca foi publicado: so quem edita enxerga e executa.
+    @Column(nullable = false, columnDefinition = "boolean not null default false")
+    var draft: Boolean = false,
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "folder_id")
     var folder: ReportFolderEntity? = null,

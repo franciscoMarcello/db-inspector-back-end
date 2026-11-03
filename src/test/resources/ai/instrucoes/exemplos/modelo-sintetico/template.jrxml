@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jasperReport name="modelo_sintetico" language="java" columnCount="1" pageWidth="842" pageHeight="595" orientation="Landscape" columnWidth="802" leftMargin="20" rightMargin="20" topMargin="20" bottomMargin="20">
+    <property name="com.jaspersoft.studio.data.defaultdataadapter" value="json"/>
+    <property name="net.sf.jasperreports.default.locale" value="pt_BR"/>
+
+    <parameter name="FMT" class="com.chico.dbinspector.report.JasperFormat"/>
+    <parameter name="LOGO_STREAM" class="java.io.InputStream"/>
+    <parameter name="data_inicio" class="java.lang.Object" forPrompting="false"><defaultValueExpression><![CDATA[null]]></defaultValueExpression></parameter>
+
+    <query language="json"><![CDATA[data]]></query>
+
+    <field name="fazenda" class="java.lang.Object"><property name="net.sf.jasperreports.json.field.expression" value="fazenda"/></field>
+    <field name="produto" class="java.lang.Object"><property name="net.sf.jasperreports.json.field.expression" value="produto"/></field>
+    <field name="peso_kg" class="java.lang.Object"><property name="net.sf.jasperreports.json.field.expression" value="peso_kg"/></field>
+    <field name="custo" class="java.lang.Object"><property name="net.sf.jasperreports.json.field.expression" value="custo"/></field>
+
+    <variable name="total_peso" class="java.lang.Double" calculation="Sum">
+        <expression><![CDATA[$F{peso_kg} == null ? Double.valueOf(0) : Double.valueOf(String.valueOf($F{peso_kg}))]]></expression>
+    </variable>
+
+    <group name="G_FAZENDA">
+        <expression><![CDATA[String.valueOf($F{fazenda})]]></expression>
+        <groupHeader>
+            <band height="18">
+                <element kind="textField" x="0" y="2" width="400" height="14" bold="true">
+                    <expression><![CDATA["Fazenda: " + String.valueOf($F{fazenda}).trim()]]></expression>
+                </element>
+            </band>
+        </groupHeader>
+    </group>
+
+    <title height="50">
+        <element kind="image" x="5" y="4" width="145" height="38" onErrorType="Blank">
+            <expression><![CDATA[$P{LOGO_STREAM}]]></expression>
+        </element>
+        <element kind="textField" x="200" y="10" width="400" height="20" bold="true">
+            <expression><![CDATA["Modelo sintetico - a partir de " + String.valueOf($P{data_inicio})]]></expression>
+        </element>
+    </title>
+
+    <detail>
+        <band height="16">
+            <element kind="textField" x="0" y="0" width="300" height="14">
+                <expression><![CDATA[String.valueOf($F{produto}).trim()]]></expression>
+            </element>
+            <element kind="textField" x="300" y="0" width="150" height="14" hTextAlign="Right">
+                <expression><![CDATA[String.format(new java.util.Locale("pt", "BR"), "%,.2f", $F{peso_kg} == null ? Double.valueOf(0) : Double.valueOf(String.valueOf($F{peso_kg})))]]></expression>
+            </element>
+            <element kind="textField" x="460" y="0" width="150" height="14" hTextAlign="Right">
+                <expression><![CDATA[$P{FMT}.moeda($F{custo})]]></expression>
+            </element>
+            <element kind="textField" x="620" y="0" width="150" height="14" hTextAlign="Right">
+                <expression><![CDATA[String.valueOf($F{peso_kg}).replace(",", "X").replace(".", ",").replace("X", ".")]]></expression>
+            </element>
+        </band>
+    </detail>
+</jasperReport>

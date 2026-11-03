@@ -12,6 +12,7 @@ import org.springframework.mail.javamail.JavaMailSender
 import org.springframework.mail.javamail.MimeMessageHelper
 import org.springframework.stereotype.Service
 import java.io.ByteArrayInputStream
+import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -159,7 +160,8 @@ class EmailReportService(
         queryResult: Map<String, Any?>,
         extraAttachments: List<EmailAttachment> = emptyList(),
         attachTabularXlsx: Boolean = true,
-        scheduleId: String? = null
+        scheduleId: String? = null,
+        comparisonDetail: ComparisonEmailDetail? = null
     ): EmailSendResult {
         val to = parseEmails(request.to)
         val cc = parseEmails(request.cc)
@@ -176,13 +178,14 @@ class EmailReportService(
         val tabular = EmailReportFormatter.toTabular(queryResult)
         val prettyJson = EmailReportFormatter.prettyJson(mapper, queryResult)
         val summary = extractComparisonSummary(queryResult)
-        val templateVars = buildTemplateVariables(summary, scheduleId)
+        val templateVars = buildTemplateVariables(summary, scheduleId, comparisonDetail)
         val renderedMessage = renderTemplate(request.message, templateVars)
         val htmlBody = if (summary != null) {
             EmailReportFormatter.buildExecutiveComparisonHtml(
                 summary = summary,
                 title = request.comparisonTitle,
-                note = request.comparisonNote
+                note = request.comparisonNote,
+                detail = comparisonDetail
             )
         } else {
             EmailReportFormatter.buildHtmlPreview(tabular, properties.schedule.previewLimit, prettyJson)
@@ -303,7 +306,11 @@ class EmailReportService(
         return ComparisonEmailSummary(status, apenasAgromobi, apenasSap, linhasDiferentes, linhasCorrespondentes)
     }
 
-    private fun buildTemplateVariables(summary: ComparisonEmailSummary?, scheduleId: String?): Map<String, String> {
+    private fun buildTemplateVariables(
+        summary: ComparisonEmailSummary?,
+        scheduleId: String?,
+        detail: ComparisonEmailDetail?
+    ): Map<String, String> {
         val vars = mutableMapOf<String, String>()
         vars["data_execucao"] = LocalDateTime.now().format(subjectFmt)
         vars["schedule_id"] = scheduleId ?: ""
@@ -313,6 +320,11 @@ class EmailReportService(
             vars["apenas_sap"] = summary.apenasSap.toString()
             vars["linhas_diferentes"] = summary.linhasDiferentes.toString()
             vars["linhas_correspondentes"] = summary.linhasCorrespondentes.toString()
+        }
+        if (detail != null) {
+            val totalDelta = detail.groups.fold(BigDecimal.ZERO) { acc, group -> acc + group.deltaSum }
+            vars["valor_divergente"] = "%.2f".format(totalDelta.toDouble())
+            vars["grupo_top"] = detail.groups.firstOrNull()?.group ?: ""
         }
         return vars
     }

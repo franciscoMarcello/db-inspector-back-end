@@ -12,6 +12,11 @@ data class TabularResult(
 
 object EmailReportFormatter {
 
+    private const val WHOLE_ROW_FIELD = "(linha completa)"
+    private const val HEADER_STYLE = "border:1px solid #e5e7eb; background:#f3f4f6; padding:4px 8px; text-align:left;"
+    private const val CELL_STYLE = "border:1px solid #e5e7eb; padding:4px 8px;"
+    private const val CELL_STYLE_RIGHT = "border:1px solid #e5e7eb; padding:4px 8px; text-align:right;"
+
     data class ComparisonSummary(
         val hasDifference: Boolean,
         val onlyInSource1: Int,
@@ -125,10 +130,14 @@ object EmailReportFormatter {
         source1Rows: List<Map<String, Any?>>,
         source2Label: String,
         source2Rows: List<Map<String, Any?>>,
+        differences: List<EmailComparisonDifference>,
+        groups: List<ComparisonGroupSummary>,
         maxRowsPerSheet: Int
     ): ByteArray {
         val workbook = XSSFWorkbook()
         return workbook.use { wb ->
+            addSummarySheet(wb, source1Label, source2Label, groups)
+            addDifferencesSheet(wb, source1Label, source2Label, differences, maxRowsPerSheet)
             addMapRowsSheet(wb, "agromobi", source1Label, source1Rows, maxRowsPerSheet)
             addMapRowsSheet(wb, "sap", source2Label, source2Rows, maxRowsPerSheet)
             java.io.ByteArrayOutputStream().use { output ->
@@ -141,7 +150,8 @@ object EmailReportFormatter {
     fun buildExecutiveComparisonHtml(
         summary: ComparisonEmailSummary,
         title: String?,
-        note: String?
+        note: String?,
+        detail: ComparisonEmailDetail? = null
     ): String {
         val isDivergence = summary.status.equals("DIVERGENCIA", ignoreCase = true)
         val badgeBg = if (isDivergence) "#fee2e2" else "#dcfce7"
@@ -150,7 +160,8 @@ object EmailReportFormatter {
         val totalBase = totalDif + summary.linhasCorrespondentes
         val percentual = if (totalBase == 0) 0.0 else (totalDif * 100.0 / totalBase)
         val resolvedTitle = title?.trim().takeUnless { it.isNullOrBlank() } ?: "Comparacao Agromobi x SAP"
-        val resolvedNote = note?.trim().takeUnless { it.isNullOrBlank() } ?: "Consulte o anexo para detalhes por origem."
+        val resolvedNote = note?.trim().takeUnless { it.isNullOrBlank() }
+            ?: "Consulte a aba \"diferencas\" do anexo para o detalhe de cada divergencia."
         return """
             <div style="font-family: Arial, sans-serif; color:#111827; font-size:13px; line-height:1.45;">
               <h2 style="margin:0 0 8px 0; font-size:18px;">${escapeHtml(resolvedTitle)}</h2>
@@ -168,6 +179,8 @@ object EmailReportFormatter {
                 </tr>
               </table>
               <p style="margin:10px 0 0 0;"><strong>Percentual de divergencia:</strong> ${"%.2f".format(percentual)}%</p>
+              ${detail?.let { buildGroupsTableHtml(it) } ?: ""}
+              ${detail?.let { buildTopDifferencesTableHtml(it) } ?: ""}
               <p style="margin:6px 0 0 0; color:#4b5563;">${escapeHtml(resolvedNote)}</p>
             </div>
         """.trimIndent()
@@ -194,6 +207,180 @@ object EmailReportFormatter {
             .replace("\"", "&quot;")
             .replace("'", "&#39;")
     }
+
+    private fun addDifferencesSheet(
+        workbook: XSSFWorkbook,
+        source1Label: String,
+        source2Label: String,
+        differences: List<EmailComparisonDifference>,
+        maxRows: Int
+    ) {
+        val sheet = workbook.createSheet("diferencas")
+        val columns = listOf("Tipo", "Chave", "Campo", "Valor $source1Label", "Valor $source2Label", "Diferenca")
+        val header = sheet.createRow(0)
+        columns.forEachIndexed { index, column -> header.createCell(index).setCellValue(column) }
+
+        if (differences.isEmpty()) {
+            sheet.createRow(1).createCell(0).setCellValue("Nenhuma diferenca encontrada")
+        }
+
+        differences.take(maxRows).forEachIndexed { idx, difference ->
+            val row = sheet.createRow(idx + 1)
+            row.createCell(0).setCellValue(differenceTypeLabel(difference.type, source1Label, source2Label))
+            row.createCell(1).setCellValue(difference.key ?: "")
+            row.createCell(2).setCellValue(difference.column ?: WHOLE_ROW_FIELD)
+            val (value1, value2) = differenceValues(difference)
+            row.createCell(3).setCellValue(value1)
+            row.createCell(4).setCellValue(value2)
+            difference.delta?.let { row.createCell(5).setCellValue(it.toDouble()) }
+        }
+
+        columns.indices.forEach { col -> sheet.autoSizeColumn(col) }
+    }
+
+    private fun addSummarySheet(
+        workbook: XSSFWorkbook,
+        source1Label: String,
+        source2Label: String,
+        groups: List<ComparisonGroupSummary>
+    ) {
+        val sheet = workbook.createSheet("resumo")
+        val columns = listOf(
+            "Grupo",
+            "Apenas no $source1Label",
+            "Apenas no $source2Label",
+            "Valores divergentes",
+            "Soma das diferencas",
+            "Valor apenas no $source1Label",
+            "Valor apenas no $source2Label"
+        )
+        val header = sheet.createRow(0)
+        columns.forEachIndexed { index, column -> header.createCell(index).setCellValue(column) }
+
+        if (groups.isEmpty()) {
+            sheet.createRow(1).createCell(0).setCellValue("Nenhuma diferenca encontrada")
+        }
+
+        groups.forEachIndexed { idx, group ->
+            val row = sheet.createRow(idx + 1)
+            row.createCell(0).setCellValue(group.group)
+            row.createCell(1).setCellValue(group.onlyInSource1.toDouble())
+            row.createCell(2).setCellValue(group.onlyInSource2.toDouble())
+            row.createCell(3).setCellValue(group.divergentValues.toDouble())
+            row.createCell(4).setCellValue(group.deltaSum.toDouble())
+            row.createCell(5).setCellValue(group.valueOnlyInSource1.toDouble())
+            row.createCell(6).setCellValue(group.valueOnlyInSource2.toDouble())
+        }
+
+        columns.indices.forEach { col -> sheet.autoSizeColumn(col) }
+    }
+
+    private fun buildGroupsTableHtml(detail: ComparisonEmailDetail): String {
+        if (detail.groups.isEmpty()) return ""
+        val valueNote = detail.valueColumn?.let { " (valores em \"${escapeHtml(it)}\")" } ?: ""
+        val rows = detail.groups.joinToString("") { group ->
+            """
+            <tr>
+              <td style="$CELL_STYLE">${escapeHtml(group.group)}</td>
+              <td style="$CELL_STYLE_RIGHT">${group.onlyInSource1}</td>
+              <td style="$CELL_STYLE_RIGHT">${group.onlyInSource2}</td>
+              <td style="$CELL_STYLE_RIGHT">${group.divergentValues}</td>
+              <td style="$CELL_STYLE_RIGHT">${formatAmount(group.deltaSum)}</td>
+            </tr>
+            """.trimIndent()
+        }
+        return """
+            <h3 style="margin:16px 0 6px 0; font-size:14px;">Resumo por grupo$valueNote</h3>
+            <table cellspacing="0" cellpadding="0" style="border-collapse:collapse; font-size:12px;">
+              <thead>
+                <tr>
+                  <th style="$HEADER_STYLE">Grupo</th>
+                  <th style="$HEADER_STYLE">Apenas no ${escapeHtml(detail.source1Label)}</th>
+                  <th style="$HEADER_STYLE">Apenas no ${escapeHtml(detail.source2Label)}</th>
+                  <th style="$HEADER_STYLE">Divergentes</th>
+                  <th style="$HEADER_STYLE">Soma das diferencas</th>
+                </tr>
+              </thead>
+              <tbody>$rows</tbody>
+            </table>
+        """.trimIndent()
+    }
+
+    private fun buildTopDifferencesTableHtml(detail: ComparisonEmailDetail): String {
+        if (detail.topDifferences.isEmpty()) return ""
+        val rows = detail.topDifferences.joinToString("") { difference ->
+            val (value1, value2) = htmlDifferenceValues(difference, detail.valueColumn)
+            """
+            <tr>
+              <td style="$CELL_STYLE">${escapeHtml(differenceTypeLabel(difference.type, detail.source1Label, detail.source2Label))}</td>
+              <td style="$CELL_STYLE">${escapeHtml(difference.key ?: "")}</td>
+              <td style="$CELL_STYLE">${escapeHtml(difference.column ?: detail.valueColumn ?: WHOLE_ROW_FIELD)}</td>
+              <td style="$CELL_STYLE_RIGHT">${escapeHtml(value1)}</td>
+              <td style="$CELL_STYLE_RIGHT">${escapeHtml(value2)}</td>
+              <td style="$CELL_STYLE_RIGHT">${difference.delta?.let { formatAmount(it) } ?: ""}</td>
+            </tr>
+            """.trimIndent()
+        }
+        return """
+            <h3 style="margin:16px 0 6px 0; font-size:14px;">Maiores divergencias (${detail.topDifferences.size})</h3>
+            <table cellspacing="0" cellpadding="0" style="border-collapse:collapse; font-size:12px;">
+              <thead>
+                <tr>
+                  <th style="$HEADER_STYLE">Tipo</th>
+                  <th style="$HEADER_STYLE">Chave</th>
+                  <th style="$HEADER_STYLE">Campo</th>
+                  <th style="$HEADER_STYLE">${escapeHtml(detail.source1Label)}</th>
+                  <th style="$HEADER_STYLE">${escapeHtml(detail.source2Label)}</th>
+                  <th style="$HEADER_STYLE">Diferenca</th>
+                </tr>
+              </thead>
+              <tbody>$rows</tbody>
+            </table>
+        """.trimIndent()
+    }
+
+    /**
+     * No email a chave ja esta em coluna propria, entao a linha exclusiva mostra so a coluna de
+     * valor. A linha inteira continua na aba "diferencas" do anexo.
+     */
+    private fun htmlDifferenceValues(
+        difference: EmailComparisonDifference,
+        valueColumn: String?
+    ): Pair<String, String> {
+        if (valueColumn.isNullOrBlank() || difference.type == ComparisonDifferenceType.DIVERGENT_VALUE) {
+            return differenceValues(difference)
+        }
+        val value = difference.row.entries
+            .firstOrNull { it.key.equals(valueColumn, ignoreCase = true) }
+            ?.value
+            ?.toString()
+            ?: return differenceValues(difference)
+        return if (difference.type == ComparisonDifferenceType.ONLY_IN_SOURCE1) value to "" else "" to value
+    }
+
+    private fun differenceValues(difference: EmailComparisonDifference): Pair<String, String> =
+        when (difference.type) {
+            ComparisonDifferenceType.ONLY_IN_SOURCE1 -> describeRow(difference.row) to ""
+            ComparisonDifferenceType.ONLY_IN_SOURCE2 -> "" to describeRow(difference.row)
+            ComparisonDifferenceType.DIVERGENT_VALUE ->
+                (difference.value1?.toString() ?: "") to (difference.value2?.toString() ?: "")
+        }
+
+    private fun differenceTypeLabel(
+        type: ComparisonDifferenceType,
+        source1Label: String,
+        source2Label: String
+    ): String = when (type) {
+        ComparisonDifferenceType.ONLY_IN_SOURCE1 -> "Apenas no $source1Label"
+        ComparisonDifferenceType.ONLY_IN_SOURCE2 -> "Apenas no $source2Label"
+        ComparisonDifferenceType.DIVERGENT_VALUE -> "Valor divergente"
+    }
+
+    private fun describeRow(row: Map<String, Any?>): String =
+        row.entries.joinToString("; ") { "${it.key}=${it.value?.toString() ?: ""}" }
+
+    private fun formatAmount(value: java.math.BigDecimal): String =
+        "%.2f".format(value.toDouble())
 
     private fun addMapRowsSheet(
         workbook: XSSFWorkbook,
