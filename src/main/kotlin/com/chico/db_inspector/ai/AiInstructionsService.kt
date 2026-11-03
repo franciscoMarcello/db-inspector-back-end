@@ -98,6 +98,7 @@ class AiInstructionsService(
             .replace("{{PREVIEW_ROWS}}", ai.previewMaxRows.toString())
             .replace("{{PDF_ROWS}}", ai.pdfPreviewMaxRows.toString())
             .replace("{{MAX_COST}}", "%.0f".format(ai.maxPlanCost))
+            .replace("{{APPROVAL_MAX_ROWS}}", ai.approvalMaxRows.toString())
             .replace(
                 "{{EXEMPLOS}}",
                 examples.takeIf { it.isNotEmpty() }?.joinToString(", ") { "`$it`" }

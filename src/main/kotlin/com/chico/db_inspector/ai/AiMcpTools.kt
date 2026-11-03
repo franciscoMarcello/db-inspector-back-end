@@ -67,6 +67,13 @@ class AiMcpTools(
             readOnly = true
         ) { _, args -> json(queryService.query(convert(args, AiQueryRequest::class.java), upstream.create())) },
         tool(
+            "consultar_sap",
+            "Executa um SELECT no SAP HANA (B1, schema padrao da conexao) para conferir documento, item, conta ou " +
+                "total contra o AgroMobi. Somente leitura, sem comentario, uma consulta. Nada e gravado. Prefira agregar.",
+            """{"type":"object","properties":{"sql":{"type":"string","description":"SELECT/WITH em SQL do HANA, ex.: SELECT TOP 10 \"DocNum\" FROM OIGE"},"limite":{"type":"integer"}},"required":["sql"],"additionalProperties":false}""",
+            readOnly = true
+        ) { _, args -> json(queryService.querySap(convert(args, AiQueryRequest::class.java))) },
+        tool(
             "explicar",
             "Plano e custo estimado de um SELECT (EXPLAIN, sem executar). Use para comparar faixa curta e longa.",
             """{"type":"object","properties":{"sql":{"type":"string"}},"required":["sql"],"additionalProperties":false}""",
@@ -126,6 +133,16 @@ class AiMcpTools(
             readOnly = true, authority = "REPORT_RUN"
         ) { _, args ->
             json(reportService.preview(uuid(args, "id"), requiredInt(args, "versao"), previewRequest(args), upstream.create()))
+        },
+        tool(
+            "previa_comparacao",
+            "Roda o sql e o sqlSap de uma versao com os mesmos parametros e compara AgroMobi x SAP como a tela " +
+                "/compare: iguais, diferentes, apenas de um lado, chaves duplicadas e amostras. So colunas com o MESMO " +
+                "nome nos dois lados sao comparadas: leia `avisos` e `colunasSoNo*`.",
+            """{"type":"object","properties":{"id":{"type":"string"},"versao":{"type":"integer"},"parametros":{"type":"object"}},"required":["id","versao"],"additionalProperties":false}""",
+            readOnly = true, authority = "REPORT_RUN"
+        ) { _, args ->
+            json(reportService.compare(uuid(args, "id"), requiredInt(args, "versao"), previewRequest(args), upstream.create()))
         },
         tool(
             "previa_pdf",

@@ -3,6 +3,7 @@ package com.chico.dbinspector.ai
 import com.chico.dbinspector.auth.AdminAuditService
 import com.chico.dbinspector.auth.AuthUserPrincipal
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
 import com.chico.dbinspector.web.UpstreamContext
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -26,12 +27,13 @@ class AiQueryServiceTest {
     private val sqlExecClient = Mockito.mock(SqlExecClient::class.java)
     private val approvals = Mockito.mock(AiApprovalService::class.java)
     private val auditService = Mockito.mock(AdminAuditService::class.java)
+    private val hana = Mockito.mock(HanaQueryService::class.java)
     private val properties = DbInspectorProperties().apply {
         ai.queryMaxRows = 2
         ai.queriesPerMinute = 3
     }
     private val guard = AiSqlGuard(sqlExecClient, properties, jacksonObjectMapper())
-    private val service = AiQueryService(guard, AiQueryLimiter(properties), approvals, sqlExecClient, auditService, properties)
+    private val service = AiQueryService(guard, AiQueryLimiter(properties), approvals, sqlExecClient, auditService, properties, hana)
     private val ctx = UpstreamContext("https://api.example.com/sql/exec/", "Bearer x")
     private val tokenId = UUID.randomUUID()
     private val executed = mutableListOf<String>()
@@ -117,6 +119,34 @@ class AiQueryServiceTest {
 
         assertEquals(HttpStatus.TOO_MANY_REQUESTS, ex.status)
         assertEquals("limite_de_frequencia", ex.regra)
+    }
+
+    @Test
+    fun `consulta no SAP pede uma linha a mais, corta no limite e nao tem custo`() {
+        Mockito.`when`(hana.execLimited("SELECT \"DocNum\" FROM OIGE", 3, 60)).thenReturn(
+            HanaQueryService.QueryResult(listOf("DocNum"), listOf(mapOf("DocNum" to 1), mapOf("DocNum" to 2), mapOf("DocNum" to 3)))
+        )
+
+        val response = service.querySap(AiQueryRequest("SELECT \"DocNum\" FROM OIGE;"))
+
+        assertEquals(listOf("DocNum"), response.colunas)
+        assertEquals(2, response.quantidade)
+        assertTrue(response.truncado)
+        assertEquals(null, response.custoEstimado)
+        assertTrue(executed.isEmpty())
+    }
+
+    @Test
+    fun `consulta no SAP so com token de IA`() {
+        val principal = AuthUserPrincipal(UUID.randomUUID(), "Ana", "ana@example.com", "", true, listOf("REPORT_RUN"))
+        SecurityContextHolder.getContext().authentication =
+            UsernamePasswordAuthenticationToken(principal, null, principal.authorities)
+
+        val ex = assertThrows<AiRuleException> { service.querySap(AiQueryRequest("SELECT 1 FROM DUMMY")) }
+
+        assertEquals(HttpStatus.FORBIDDEN, ex.status)
+        assertEquals("so_token_ia", ex.regra)
+        Mockito.verifyNoInteractions(hana)
     }
 
     private fun plan(cost: Double) = listOf(

@@ -1,7 +1,9 @@
 package com.chico.dbinspector.ai
 
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.report.ComparisonSource
 import com.chico.dbinspector.report.ExecutionResult
+import com.chico.dbinspector.report.ReportComparisonService
 import com.chico.dbinspector.report.ReportEntity
 import com.chico.dbinspector.report.ReportFolderService
 import com.chico.dbinspector.report.ReportJasperTemplateRepository
@@ -18,7 +20,9 @@ import com.chico.dbinspector.report.ReportVersionContent
 import com.chico.dbinspector.report.ReportVersionResponse
 import com.chico.dbinspector.report.ReportVersionService
 import com.chico.dbinspector.report.ReportVersionSummaryResponse
+import com.chico.dbinspector.service.HanaQueryService
 import com.chico.dbinspector.service.SqlExecClient
+import com.chico.dbinspector.util.HanaReadOnlySqlValidator
 import com.chico.dbinspector.web.UpstreamContext
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
@@ -46,12 +50,15 @@ class AiReportService(
     private val limiter: AiQueryLimiter,
     private val approvals: AiApprovalService,
     private val sqlExecClient: SqlExecClient,
-    private val properties: DbInspectorProperties
+    private val properties: DbInspectorProperties,
+    private val hana: HanaQueryService,
+    private val comparisonService: ReportComparisonService
 ) {
     private val placeholderRegex = Regex("(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
 
     private companion object {
         const val MAX_PDF_CELL_CHARS = 2_000
+        const val COMPARISON_SAMPLE = 20
     }
 
     fun folders(): List<AiFolder> = folderService.list().filterNot { it.archived }.map { AiFolder(it.id, it.name, it.description) }
@@ -124,6 +131,101 @@ class AiReportService(
                 tempoMs = (System.nanoTime() - start) / 1_000_000
             )
         }
+    }
+
+    /**
+     * Roda o `sql` e o `sqlSap` da versao com os mesmos parametros e compara como a tela /compare: so as colunas
+     * com o mesmo nome nos dois lados entram. Linha cortada daria "apenas no SAP" falso, entao corte e recusa.
+     */
+    fun compare(reportId: UUID, versionNumber: Int, request: AiPreviewRequest, ctx: UpstreamContext): AiComparisonResponse {
+        requireAuthority("REPORT_RUN")
+        val token = requireAiToken()
+        val report = versionService.transientReport(reportId, versionNumber)
+        val sqlSap = report.secondSql?.trim()?.removeSuffix(";")?.takeIf { it.isNotBlank() }
+            ?: throw AiValidationException(listOf(AiProblem("sqlSap", "sem_sql_sap", "A versao $versionNumber nao tem sqlSap")))
+        val key = report.comparisonKey?.trim()?.takeIf { it.isNotBlank() }
+        val rendered = render(report, request.parametros)
+        val renderedSap = try {
+            queryService.buildQueryWithParams(sqlSap, report.variables, request.parametros, enforceRequired = true)
+        } catch (ex: IllegalArgumentException) {
+            throw AiValidationException(listOf(AiProblem("parametros", "parametro_invalido", ex.message ?: "Parametro invalido")))
+        }
+        val approved = approvals.findActive(token.tokenId, rendered) != null
+        // Teto de linhas por lado: o mesmo maximo que uma liberacao concede.
+        val cap = properties.ai.approvalMaxRows
+
+        return limiter.run(token.tokenId) {
+            guard.check(rendered, ctx, ignoreCost = approved)
+            val start = System.nanoTime()
+            val (columns1, rows1) = execute("SELECT * FROM ($rendered) ai_comparacao LIMIT ${cap + 1}", ctx)
+            val sap = hana.execLimited(renderedSap, cap + 1, properties.ai.queryTimeoutSeconds.toInt())
+            if (rows1.size > cap || sap.rows.size > cap) {
+                throw AiRuleException(
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "comparacao_grande_demais",
+                    "Mais de $cap linhas em um dos lados (AgroMobi ${rows1.size}, SAP ${sap.rows.size}); comparacao cortada seria falsa",
+                    "Filtre um periodo menor nos parametros ou agregue os dois SQLs pela mesma chave."
+                )
+            }
+            val problems = listOfNotNull(
+                key?.takeIf { it !in columns1 }?.let { AiProblem("chaveComparacao", "chave_ausente", "Coluna '$it' nao existe no sql (AgroMobi)") },
+                key?.takeIf { it !in sap.columns }?.let { AiProblem("chaveComparacao", "chave_ausente", "Coluna '$it' nao existe no sqlSap (veio: ${sap.columns.joinToString()})") }
+            )
+            if (problems.isNotEmpty()) throw AiValidationException(problems)
+
+            val common = (columns1.toSet() intersect sap.columns.toSet()) - setOfNotNull(key)
+            val source1 = ComparisonSource("AgroMobi", columns1, rows1, rows1.size)
+            val source2 = ComparisonSource("SAP", sap.columns, sap.rows, sap.rows.size)
+            val diff = if (key != null) {
+                comparisonService.buildKeyedDiff(source1, source2, key, common, emptyMap())
+            } else {
+                comparisonService.buildContentDiff(source1, source2, common, emptyMap())
+            }
+            val onlyAgromobi = columns1.filterNot { it in sap.columns }
+            val onlySap = sap.columns.filterNot { it in columns1 }
+
+            AiComparisonResponse(
+                chaveComparacao = key,
+                modo = diff.mode,
+                linhasAgromobi = rows1.size,
+                linhasSap = sap.rows.size,
+                colunasComparadas = common.toList(),
+                colunasSoNoAgromobi = onlyAgromobi,
+                colunasSoNoSap = onlySap,
+                iguais = diff.equalCount,
+                diferentes = diff.differentCount,
+                apenasAgromobi = diff.onlyInSource1.size,
+                apenasSap = diff.onlyInSource2.size,
+                chavesDuplicadasAgromobi = diff.duplicateKeysSource1.entries.take(COMPARISON_SAMPLE).associate { it.toPair() },
+                chavesDuplicadasSap = diff.duplicateKeysSource2.entries.take(COMPARISON_SAMPLE).associate { it.toPair() },
+                amostraDiferentes = diff.withDifferences.take(COMPARISON_SAMPLE).map { record ->
+                    mapOf(
+                        "chave" to record.key,
+                        "campos" to record.fields.filterValues { !it.equal }
+                            .mapValues { (_, f) -> mapOf("agromobi" to f.source1, "sap" to f.source2, "diferenca" to f.diff) }
+                    )
+                },
+                amostraApenasAgromobi = diff.onlyInSource1.take(COMPARISON_SAMPLE),
+                amostraApenasSap = diff.onlyInSource2.take(COMPARISON_SAMPLE),
+                avisos = comparisonWarnings(onlyAgromobi, onlySap, common, diff.duplicateKeysSource1.size + diff.duplicateKeysSource2.size),
+                tempoMs = (System.nanoTime() - start) / 1_000_000
+            )
+        }
+    }
+
+    private fun comparisonWarnings(onlyAgromobi: List<String>, onlySap: List<String>, common: Set<String>, duplicatedKeys: Int) = buildList {
+        if (onlyAgromobi.isNotEmpty() || onlySap.isNotEmpty()) {
+            add(
+                "Colunas so de um lado NAO sao comparadas (resultado pode dizer iguais sem conferir): " +
+                    "AgroMobi ${onlyAgromobi.ifEmpty { listOf("-") }}, SAP ${onlySap.ifEmpty { listOf("-") }}. Padronize os aliases."
+            )
+        }
+        val caseOnly = onlyAgromobi.filter { a -> onlySap.any { it.equals(a, ignoreCase = true) } }
+        if (caseOnly.isNotEmpty()) {
+            add("$caseOnly diferem so em maiusculas: no HANA alias sem aspas vira MAIUSCULO. Use AS \"${caseOnly.first()}\" no sqlSap.")
+        }
+        if (common.isEmpty()) add("Nenhuma coluna em comum alem da chave: so a existencia das chaves foi conferida.")
+        if (duplicatedKeys > 0) add("Ha chave repetida: as linhas dessa chave sao casadas pela ordem. Agregue pela chave para comparar valores.")
     }
 
     /** Gera o PDF da versao com poucas linhas. Devolve os bytes e quantas linhas usou. */
@@ -216,7 +318,10 @@ class AiReportService(
         variables.forEachIndexed { index, variable ->
             variable.optionsSql?.let { problems += guard.staticProblems(it, "variaveis[$index].sqlOpcoes") }
         }
-        definition.sqlSap?.takeIf { it.isNotBlank() }?.let { problems += guard.staticProblems(it, "sqlSap") }
+        definition.sqlSap?.takeIf { it.isNotBlank() }?.let { sqlSap ->
+            problems += guard.staticProblems(sqlSap, "sqlSap")
+            HanaReadOnlySqlValidator.validate(sqlSap)?.let { problems += AiProblem("sqlSap", "sap_somente_leitura", it) }
+        }
         if (!definition.chaveComparacao.isNullOrBlank() && definition.sqlSap.isNullOrBlank()) {
             problems += AiProblem("chaveComparacao", "comparacao_sem_sql_sap", "chaveComparacao exige sqlSap")
         }

@@ -68,7 +68,7 @@ class AiMcpServerTest {
     fun `lista as ferramentas e nenhuma publica, exclui ou libera`() {
         val names = call("tools/list", "{}")["tools"].map { it["name"].asText() }.toSet()
 
-        assertTrue(names.containsAll(setOf("ler_instrucoes", "buscar_tabelas", "consultar", "validar", "criar_rascunho", "salvar_rascunho", "previa")))
+        assertTrue(names.containsAll(setOf("ler_instrucoes", "buscar_tabelas", "consultar", "consultar_sap", "previa_comparacao", "validar", "criar_rascunho", "salvar_rascunho", "previa")))
         assertFalse(names.any { it.contains("public") || it.contains("exclu") || it.contains("restaur") || it.contains("token") || it.contains("aprovar") })
     }
 

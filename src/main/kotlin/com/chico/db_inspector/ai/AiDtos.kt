@@ -52,6 +52,14 @@ data class AiTokenAuthenticationDetails(
 fun currentAiToken(): AiTokenAuthenticationDetails? =
     SecurityContextHolder.getContext().authentication?.details as? AiTokenAuthenticationDetails
 
+/** O SAP so e lido por token de IA (rpt_), nunca por sessao de pessoa pela API de IA. */
+fun requireAiToken(): AiTokenAuthenticationDetails = currentAiToken() ?: throw AiRuleException(
+    org.springframework.http.HttpStatus.FORBIDDEN,
+    "so_token_ia",
+    "Consulta ao SAP so com token de IA",
+    "Use um token rpt_ gerado na tela de tokens."
+)
+
 data class AiQueryRequest(
     @field:NotBlank
     @field:Size(max = 100_000)
@@ -199,6 +207,28 @@ data class AiPreviewResponse(
     val quantidade: Int,
     val truncado: Boolean,
     val custoEstimado: Double?,
+    val tempoMs: Long
+)
+
+/** Previa da comparacao AgroMobi x SAP, com o mesmo comparador da tela /compare. */
+data class AiComparisonResponse(
+    val chaveComparacao: String?,
+    val modo: String,
+    val linhasAgromobi: Int,
+    val linhasSap: Int,
+    val colunasComparadas: List<String>,
+    val colunasSoNoAgromobi: List<String>,
+    val colunasSoNoSap: List<String>,
+    val iguais: Int,
+    val diferentes: Int,
+    val apenasAgromobi: Int,
+    val apenasSap: Int,
+    val chavesDuplicadasAgromobi: Map<String, Int>,
+    val chavesDuplicadasSap: Map<String, Int>,
+    val amostraDiferentes: List<Map<String, Any?>>,
+    val amostraApenasAgromobi: List<Map<String, Any?>>,
+    val amostraApenasSap: List<Map<String, Any?>>,
+    val avisos: List<String>,
     val tempoMs: Long
 )
 
