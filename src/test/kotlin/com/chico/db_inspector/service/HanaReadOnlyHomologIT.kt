@@ -76,4 +76,20 @@ class HanaReadOnlyHomologIT {
 
         assertEquals(antes, totalOige(service))
     }
+
+    @ParameterizedTest
+    @MethodSource("schemas")
+    fun `deve ler usuarios do B1 sem nunca devolver o hash da senha`(schema: String) {
+        val service = service(schema)
+
+        val usuarios = service.execLimited("SELECT TOP 3 \"USER_CODE\", \"U_NAME\" FROM OUSR", 3, 30)
+
+        assertEquals(listOf("USER_CODE", "U_NAME"), usuarios.columns)
+        listOf(
+            "SELECT * FROM OUSR",
+            "SELECT \"PASSWORD\" FROM OUSR",
+            "SELECT 'a' AS c FROM DUMMY WHERE 1 = 0 UNION ALL SELECT * FROM OUSR"
+        ).forEach { sql -> assertThrows<IllegalArgumentException>(sql) { service.execLimited(sql, 3, 30) } }
+    }
+
 }

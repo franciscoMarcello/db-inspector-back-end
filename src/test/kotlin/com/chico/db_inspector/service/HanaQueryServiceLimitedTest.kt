@@ -69,4 +69,24 @@ class HanaQueryServiceLimitedTest {
         Mockito.verify(connection).rollback()
         Mockito.verify(connection, Mockito.never()).commit()
     }
+
+    @Test
+    fun `deve mascarar coluna com nome de senha que chegue no resultado`() {
+        wireConnection()
+        val meta = Mockito.mock(ResultSetMetaData::class.java)
+        Mockito.`when`(statement.executeQuery()).thenReturn(resultSet)
+        Mockito.`when`(resultSet.metaData).thenReturn(meta)
+        Mockito.`when`(meta.columnCount).thenReturn(2)
+        Mockito.`when`(meta.getColumnLabel(1)).thenReturn("USER_CODE")
+        Mockito.`when`(meta.getColumnLabel(2)).thenReturn("SENHA")
+        Mockito.`when`(resultSet.next()).thenReturn(true, false)
+        Mockito.`when`(resultSet.getObject(1)).thenReturn("manager")
+        Mockito.`when`(resultSet.getObject(2)).thenReturn("hash-real")
+
+        val result = service.execLimited("SELECT \"USER_CODE\", 'x' AS c FROM OUSR", 3, 7)
+
+        assertEquals(listOf(mapOf("USER_CODE" to "manager", "SENHA" to "***")), result.rows)
+        Mockito.verify(resultSet, Mockito.never()).getObject(2)
+    }
+
 }

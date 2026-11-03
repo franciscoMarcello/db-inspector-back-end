@@ -89,9 +89,12 @@ class HanaQueryService(
                 ps.executeQuery().use { rs ->
                     val meta = rs.metaData
                     val columns = (1..meta.columnCount).map { meta.getColumnLabel(it) }
+                    val masked = columns.map { HanaReadOnlySqlValidator.isSensitiveColumn(it) }
                     val rows = mutableListOf<Map<String, Any?>>()
                     while (rs.next()) {
-                        rows += columns.withIndex().associate { (i, name) -> name to readable(rs.getObject(i + 1)) }
+                        rows += columns.withIndex().associate { (i, name) ->
+                            name to if (masked[i]) "***" else readable(rs.getObject(i + 1))
+                        }
                     }
                     QueryResult(columns, rows)
                 }
