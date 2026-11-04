@@ -132,6 +132,10 @@ gravar, confirme com `consultar` (prefira agregados - o retorno e limitado a {{Q
 - SQL do SAP e so leitura e mais rigido que o do AgroMobi: sem comentario, uma consulta, e as palavras
   `INTO`, `LOCK`, `NEXTVAL`, `SET`, `DO`, `CALL`, `EXEC`, `COMMENT`, `LOAD` (e comandos de escrita) sao recusadas
   mesmo dentro de texto ou entre aspas. Recusa nao tem liberacao: reescreva o SQL.
+- **Sem `*` no SAP** (menos `COUNT(*)`): liste as colunas. Para descobrir os nomes:
+  `SELECT COLUMN_NAME, DATA_TYPE_NAME FROM SYS.TABLE_COLUMNS WHERE SCHEMA_NAME = 'SBOGRUPOROVEMA' AND TABLE_NAME = 'OIGE'`.
+- **Senha, chave e token do SAP nao sao lidos**: coluna cujo nome contem `passw`, `pwd`, `senha`, `secret`, `token`,
+  `apikey`, `credenc`/`credential` ou `privatekey` e recusada no SQL e aparece como `***` se vier no resultado.
 - **Antes de entregar relatorio com `sqlSap`, rode `previa_comparacao`** e leia `avisos`: coluna so de um lado
   nao e comparada; no HANA alias sem aspas vira MAIUSCULO (use `AS \"kg\"`). Mais de {{APPROVAL_MAX_ROWS}} linhas em
   um lado e recusado: filtre o periodo ou agregue pela chave. Escreva na `nota` os numeros (iguais, apenas de um

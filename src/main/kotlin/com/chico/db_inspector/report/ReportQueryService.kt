@@ -25,14 +25,15 @@ class ReportQueryService {
         val unknown = params.keys.filterNot { knownKeys.contains(it) }
         require(unknown.isEmpty()) { "Parametros desconhecidos: ${unknown.joinToString(", ")}" }
 
-        var rendered = queryTemplate
-        variables.forEach { variable ->
-            val rawValue = resolveVariableValue(variable, params, enforceRequired)
-            val sqlLiteral = toSqlLiteral(variable, rawValue)
-            val placeholder = Regex("(?<!:):${Regex.escape(variable.key)}\\b")
-            rendered = rendered.replace(placeholder, sqlLiteral)
+        val literals = variables.associate { variable ->
+            variable.key to toSqlLiteral(variable, resolveVariableValue(variable, params, enforceRequired))
         }
-        return rendered
+        // Uma passada so: valor ja inserido nao e varrido de novo. Em varias passadas, o valor ':b' de uma
+        // variavel virava placeholder de b e o valor de b saia fora das aspas (injecao de SQL).
+        val placeholder = Regex(
+            "(?<!:):(" + literals.keys.sortedByDescending { it.length }.joinToString("|") { Regex.escape(it) } + ")\\b"
+        )
+        return placeholder.replace(queryTemplate) { literals.getValue(it.groupValues[1]) }
     }
 
     private fun resolveVariableValue(

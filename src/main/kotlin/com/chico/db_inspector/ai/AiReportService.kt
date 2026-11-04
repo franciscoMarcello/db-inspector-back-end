@@ -1,5 +1,6 @@
 package com.chico.dbinspector.ai
 
+import com.chico.dbinspector.auth.AdminAuditService
 import com.chico.dbinspector.config.DbInspectorProperties
 import com.chico.dbinspector.report.ComparisonSource
 import com.chico.dbinspector.report.ExecutionResult
@@ -52,7 +53,8 @@ class AiReportService(
     private val sqlExecClient: SqlExecClient,
     private val properties: DbInspectorProperties,
     private val hana: HanaQueryService,
-    private val comparisonService: ReportComparisonService
+    private val comparisonService: ReportComparisonService,
+    private val auditService: AdminAuditService
 ) {
     private val placeholderRegex = Regex("(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -150,11 +152,47 @@ class AiReportService(
         } catch (ex: IllegalArgumentException) {
             throw AiValidationException(listOf(AiProblem("parametros", "parametro_invalido", ex.message ?: "Parametro invalido")))
         }
+        fun audit(resultado: String, details: Map<String, Any?>) = auditService.log(
+            action = "AI_COMPARE_SAP",
+            targetType = "REPORT",
+            targetId = reportId.toString(),
+            details = mapOf(
+                "token" to token.tokenName,
+                "versao" to versionNumber,
+                "parametros" to request.parametros,
+                "sqlSap" to renderedSap.take(SAP_SQL_MAX_CHARS),
+                "resultado" to resultado
+            ) + details
+        )
+        // Recusa do SQL do SAP antes de gastar a consulta do AgroMobi.
+        HanaReadOnlySqlValidator.validate(renderedSap)?.let {
+            audit("recusada", mapOf("motivo" to it))
+            throw AiValidationException(listOf(AiProblem("sqlSap", "sap_somente_leitura", it)))
+        }
         val approved = approvals.findActive(token.tokenId, rendered) != null
         // Teto de linhas por lado: o mesmo maximo que uma liberacao concede.
         val cap = properties.ai.approvalMaxRows
 
-        return limiter.run(token.tokenId) {
+        val response = try {
+            compareRows(rendered, renderedSap, key, approved, cap, token.tokenId, ctx)
+        } catch (ex: RuntimeException) {
+            audit("erro", mapOf("motivo" to ex.message?.take(500)))
+            throw ex
+        }
+        audit("ok", mapOf("linhasAgromobi" to response.linhasAgromobi, "linhasSap" to response.linhasSap, "tempoMs" to response.tempoMs))
+        return response
+    }
+
+    private fun compareRows(
+        rendered: String,
+        renderedSap: String,
+        key: String?,
+        approved: Boolean,
+        cap: Int,
+        tokenId: UUID,
+        ctx: UpstreamContext
+    ): AiComparisonResponse =
+        limiter.run(tokenId) {
             guard.check(rendered, ctx, ignoreCost = approved)
             val start = System.nanoTime()
             val (columns1, rows1) = execute("SELECT * FROM ($rendered) ai_comparacao LIMIT ${cap + 1}", ctx)
@@ -211,7 +249,6 @@ class AiReportService(
                 tempoMs = (System.nanoTime() - start) / 1_000_000
             )
         }
-    }
 
     private fun comparisonWarnings(onlyAgromobi: List<String>, onlySap: List<String>, common: Set<String>, duplicatedKeys: Int) = buildList {
         if (onlyAgromobi.isNotEmpty() || onlySap.isNotEmpty()) {

@@ -31,6 +31,7 @@ class AiReportServiceTest {
     private val sqlExecClient = Mockito.mock(SqlExecClient::class.java)
     private val versionService = Mockito.mock(ReportVersionService::class.java)
     private val hana = Mockito.mock(HanaQueryService::class.java)
+    private val auditService = Mockito.mock(com.chico.dbinspector.auth.AdminAuditService::class.java)
     private val properties = DbInspectorProperties()
     private val guard = AiSqlGuard(sqlExecClient, properties, jacksonObjectMapper())
     private val service = AiReportService(
@@ -49,7 +50,8 @@ class AiReportServiceTest {
         sqlExecClient = sqlExecClient,
         properties = properties,
         hana = hana,
-        comparisonService = ReportComparisonService()
+        comparisonService = ReportComparisonService(),
+        auditService = auditService
     )
     private val ctx = UpstreamContext("https://api.example.com/sql/exec/", "Bearer x")
     private val executed = mutableListOf<String>()
@@ -278,6 +280,27 @@ class AiReportServiceTest {
         val result = service.validate(AiReportValidationRequest(bad, mapOf("data_inicio" to "2025-03-01")), ctx)
 
         assertTrue(result.problemas.any { it.caminho == "sqlSap" && it.regra == "sap_somente_leitura" }, result.problemas.toString())
+    }
+
+
+    @Test
+    fun `previa de comparacao recusa sqlSap com estrela antes de consultar o AgroMobi e audita`() {
+        asAiToken("REPORT_RUN")
+        try {
+            val id = java.util.UUID.randomUUID()
+            comparisonReport(id, "SELECT * FROM OUSR")
+
+            assertThrows<AiValidationException> { service.compare(id, 2, AiPreviewRequest(), ctx) }
+
+            assertTrue(executed.isEmpty(), executed.toString())
+            Mockito.verifyNoInteractions(hana)
+            Mockito.verify(auditService).log(
+                Mockito.eq("AI_COMPARE_SAP") ?: "", Mockito.eq("REPORT") ?: "", Mockito.eq(id.toString()) ?: "",
+                Mockito.argThat<Map<String, Any?>> { it?.get("resultado") == "recusada" } ?: emptyMap()
+            )
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext()
+        }
     }
 
 }
