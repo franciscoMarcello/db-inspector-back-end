@@ -16,7 +16,9 @@ import org.quartz.TriggerKey
 import org.quartz.impl.matchers.GroupMatcher
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.time.Instant
 import java.time.ZonedDateTime
+import java.util.Date
 import java.util.TimeZone
 import java.util.UUID
 
@@ -214,8 +216,9 @@ class EmailReportScheduler(
         })
     }
 
-    fun scheduleDetailed(body: EmailReportRequest, ctx: UpstreamContext, query: String): EmailScheduleResponse =
-        scheduleInternal(body, ctx, query)
+    /** paused=true cria como rascunho: so dispara depois que uma pessoa retomar (resume). */
+    fun scheduleDetailed(body: EmailReportRequest, ctx: UpstreamContext, query: String, paused: Boolean = false): EmailScheduleResponse =
+        scheduleInternal(body, ctx, query, paused)
 
     fun listSchedules(): List<EmailScheduleResponse> {
         val jobKeys = scheduler.getJobKeys(GroupMatcher.anyGroup())
@@ -310,7 +313,7 @@ class EmailReportScheduler(
         scheduler.deleteJob(key)
     }
 
-    private fun scheduleInternal(body: EmailReportRequest, ctx: UpstreamContext, query: String): EmailScheduleResponse {
+    private fun scheduleInternal(body: EmailReportRequest, ctx: UpstreamContext, query: String, paused: Boolean = false): EmailScheduleResponse {
         ReadOnlySqlValidator.requireReadOnly(query)
         validateAdvancedOptions(body)
         val (hour, minute) = cronService.parseTime(body.time)
@@ -355,16 +358,20 @@ class EmailReportScheduler(
             .storeDurably()
             .build()
 
+        val cronSchedule = CronScheduleBuilder.cronSchedule(cron)
+            .inTimeZone(TimeZone.getTimeZone(cronService.scheduleZone))
+            // Rascunho: ao ativar, nao manda de uma vez os horarios que passaram enquanto estava pausado.
+            .let { if (paused) it.withMisfireHandlingInstructionDoNothing() else it }
         val trigger = TriggerBuilder.newTrigger()
             .withIdentity("trigger-$id", jobGroup)
             .forJob(jobDetail.key)
-            .withSchedule(
-                CronScheduleBuilder.cronSchedule(cron)
-                    .inTimeZone(TimeZone.getTimeZone(cronService.scheduleZone))
-            )
+            .withSchedule(cronSchedule)
+            // Rascunho: comeca daqui a 1 min para nao disparar entre o scheduleJob e o pauseTrigger.
+            .apply { if (paused) startAt(Date.from(Instant.now().plusSeconds(60))) }
             .build()
 
         scheduler.scheduleJob(jobDetail, trigger)
+        if (paused) scheduler.pauseTrigger(trigger.key)
 
         val nextRunInstant = trigger.nextFireTime
         log.info("Scheduled email with quartz scheduleId={} cron={}", id, cron)
@@ -373,7 +380,7 @@ class EmailReportScheduler(
                 id = id,
                 cron = cron,
                 nextRun = nextRunInstant?.toInstant()?.atZone(cronService.scheduleZone)?.toString(),
-                status = "NORMAL",
+                status = if (paused) "PAUSED" else "NORMAL",
                 time = body.time ?: "",
                 days = days.map { it.name },
                 sql = query,

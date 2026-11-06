@@ -56,7 +56,9 @@ class AiTokenService(
             PermissionCodes.REPORT_WRITE,
             PermissionCodes.REPORT_RUN,
             PermissionCodes.FOLDER_READ,
-            PermissionCodes.TEMPLATE_READ
+            PermissionCodes.TEMPLATE_READ,
+            // So alcanca o MCP (token de IA nao sai de /api/db/ai), que cria o agendamento pausado.
+            PermissionCodes.EMAIL_SCHEDULE_WRITE
         )
 
         private val LAST_USE_THROTTLE: Duration = Duration.ofMinutes(1)

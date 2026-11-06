@@ -2,6 +2,8 @@ package com.chico.dbinspector.ai
 
 import com.chico.dbinspector.auth.AuthUserPrincipal
 import com.chico.dbinspector.config.DbInspectorProperties
+import com.chico.dbinspector.email.EmailReportRequest
+import com.chico.dbinspector.email.EmailReportScheduler
 import com.chico.dbinspector.web.UpstreamContext
 import com.chico.dbinspector.web.UpstreamContextFactory
 import com.fasterxml.jackson.databind.JsonNode
@@ -33,12 +35,14 @@ class AiMcpServerTest {
     private val queryService = Mockito.mock(AiQueryService::class.java)
     private val approvalService = Mockito.mock(AiApprovalService::class.java)
     private val upstream = Mockito.mock(UpstreamContextFactory::class.java)
+    private val emailScheduler = Mockito.mock(EmailReportScheduler::class.java)
+    private val guard = Mockito.mock(AiSqlGuard::class.java)
     private val properties = DbInspectorProperties()
     private val config = AiMcpConfig()
     private val jsonMapper = config.aiMcpJsonMapper(mapper)
     private val transport: HttpServletStatelessServerTransport = config.aiMcpTransport(jsonMapper, properties)
     private val tools = AiMcpTools(
-        reportService, catalogService, queryService, approvalService,
+        reportService, catalogService, queryService, approvalService, emailScheduler, guard,
         AiInstructionsService(properties, catalogService), upstream, jsonMapper, mapper,
         Validation.buildDefaultValidatorFactory().validator
     )
@@ -133,6 +137,21 @@ class AiMcpServerTest {
 
         assertTrue(result["isError"].asBoolean())
         Mockito.verifyNoInteractions(reportService)
+    }
+
+    @Test
+    fun `criar_agendamento exige permissao, passa pelo validador da IA e grava pausado`() {
+        val args = """{"name":"criar_agendamento","arguments":{"sql":"SELECT 1;","to":"a@example.com","time":"08:00","days":["mon"]}}"""
+        authenticate("REPORT_WRITE")
+        assertTrue(call("tools/call", args)["content"][0]["text"].asText().contains("EMAIL_SCHEDULE_WRITE"))
+        Mockito.verifyNoInteractions(emailScheduler)
+
+        authenticate("EMAIL_SCHEDULE_WRITE")
+        call("tools/call", args)
+
+        Mockito.verify(guard).check("SELECT 1", ctx, "sql", true)
+        val body = EmailReportRequest(sql = "SELECT 1", to = "a@example.com", time = "08:00", days = listOf("mon"))
+        Mockito.verify(emailScheduler).scheduleDetailed(body, ctx, "SELECT 1", true)
     }
 
     @Test

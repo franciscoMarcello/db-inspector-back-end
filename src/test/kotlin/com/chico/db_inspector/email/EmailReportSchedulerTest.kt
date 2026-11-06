@@ -56,6 +56,31 @@ class EmailReportSchedulerTest {
     }
 
     @Test
+    fun `scheduleDetailed paused cria rascunho que nao dispara antes da pausa nem compensa horarios perdidos`() {
+        val schedulerMock = Mockito.mock(Scheduler::class.java)
+        Mockito.`when`(schedulerMock.getTriggerState(Mockito.any(TriggerKey::class.java)))
+            .thenReturn(Trigger.TriggerState.PAUSED)
+        val scheduler = createScheduler("America/Porto_Velho", schedulerMock)
+        val before = System.currentTimeMillis()
+
+        val response = scheduler.scheduleDetailed(
+            body = EmailReportRequest(sql = "select 1", to = "dev@example.com", time = "08:00", days = listOf("mon")),
+            ctx = UpstreamContext("https://api.example.com/sql/exec/", "Bearer token"),
+            query = "select 1",
+            paused = true
+        )
+
+        assertEquals("PAUSED", response.status)
+        val triggerCaptor = ArgumentCaptor.forClass(Trigger::class.java)
+        val order = Mockito.inOrder(schedulerMock)
+        order.verify(schedulerMock).scheduleJob(Mockito.any(JobDetail::class.java), triggerCaptor.capture())
+        order.verify(schedulerMock).pauseTrigger(triggerCaptor.value.key)
+        val trigger = triggerCaptor.value as CronTrigger
+        assertEquals(CronTrigger.MISFIRE_INSTRUCTION_DO_NOTHING, trigger.misfireInstruction)
+        assertTrue(trigger.startTime.time >= before + 59_000)
+    }
+
+    @Test
     fun `scheduleDetailed should reject invalid day alias`() {
         val scheduler = createScheduler("America/Porto_Velho", Mockito.mock(Scheduler::class.java))
 
