@@ -1,5 +1,7 @@
 package com.chico.dbinspector.ai
 
+import com.chico.dbinspector.email.EmailReportRequest
+import com.chico.dbinspector.email.EmailReportScheduler
 import com.chico.dbinspector.web.UpstreamContextFactory
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.modelcontextprotocol.common.McpTransportContext
@@ -19,7 +21,8 @@ import java.util.UUID
 
 /**
  * Ferramentas MCP: as mesmas operacoes da API REST de /api/db/ai, chamando os mesmos services.
- * Nao existem, de proposito: publicar, excluir, restaurar versao, gerenciar tokens e liberar consulta.
+ * Nao existem, de proposito: publicar, excluir, restaurar versao, gerenciar tokens, liberar consulta e
+ * ativar agendamento (criar_agendamento sempre grava pausado).
  */
 @Component
 class AiMcpTools(
@@ -27,6 +30,8 @@ class AiMcpTools(
     private val catalogService: AiCatalogService,
     private val queryService: AiQueryService,
     private val approvalService: AiApprovalService,
+    private val emailScheduler: EmailReportScheduler,
+    private val guard: AiSqlGuard,
     private val instructions: AiInstructionsService,
     private val upstream: UpstreamContextFactory,
     private val mcpJson: McpJsonMapper,
@@ -158,6 +163,32 @@ class AiMcpTools(
                 "com consultar_liberacao; aprovado, repita o MESMO SQL.",
             """{"type":"object","properties":{"sql":{"type":"string"},"motivo":{"type":"string"},"linhas":{"type":"integer"}},"required":["sql","motivo"],"additionalProperties":false}"""
         ) { _, args -> json(approvalService.request(convert(args, AiApprovalRequest::class.java))) },
+        tool(
+            "criar_agendamento",
+            "Cria um agendamento de e-mail como RASCUNHO (pausado): nada e enviado ate uma pessoa ativar em " +
+                "Agendamentos. Mesmos campos da tela. O `sql` passa pelo mesmo validador do `consultar` (sem :parametros). " +
+                "Para anexar o PDF de um relatorio, ele precisa estar publicado (attachPdf, reportId).",
+            """{"type":"object","required":["sql","to","time","days"],"properties":{
+                "sql":{"type":"string","description":"SELECT PostgreSQL sem parametros; o resultado vai no corpo/planilha"},
+                "to":{"type":"string","description":"e-mails separados por virgula"},"cc":{"type":"string"},
+                "subject":{"type":"string"},"message":{"type":"string"},
+                "time":{"type":"string","description":"HH:mm, fuso do servidor"},
+                "days":{"type":"array","items":{"type":"string","enum":["mon","tue","wed","thu","fri","sat","sun"]}},
+                "attachXlsx":{"type":"boolean"},"attachPdf":{"type":"boolean"},
+                "pdfMode":{"type":"string","enum":["report","scheduled_sql"]},"reportId":{"type":"string"},
+                "pdfTitle":{"type":"string"},"pdfSubtitle":{"type":"string"},
+                "compareWithSap":{"type":"boolean"},"secondSql":{"type":"string","description":"SELECT no SAP HANA"},
+                "comparisonKey":{"type":"string"},"comparisonTitle":{"type":"string"},"comparisonNote":{"type":"string"},
+                "sendOnlyIfDifferent":{"type":"boolean"}}}""",
+            authority = "EMAIL_SCHEDULE_WRITE"
+        ) { _, args ->
+            val body = convert(args, EmailReportRequest::class.java)
+            val sql = body.sql.trim().removeSuffix(";").trim()
+            val ctx = upstream.create()
+            // Schemas e colunas liberados para IA; custo fica para quem ativar.
+            guard.check(sql, ctx, ignoreCost = true)
+            json(emailScheduler.scheduleDetailed(body.copy(sql = sql), ctx, sql, paused = true))
+        },
         tool("consultar_liberacao", "Situacao de um pedido de liberacao.", ID_ARG, readOnly = true) { _, args ->
             json(approvalService.getForToken(uuid(args, "id")))
         }

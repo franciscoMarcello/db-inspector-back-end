@@ -40,10 +40,13 @@ quem so executa relatorios nao ve o rascunho, e a versao publicada continua vale
 | `salvar_rascunho` | `PUT /relatorios/{id}/rascunho` | Nova versao (rascunho) de um existente |
 | `previa` | `POST /relatorios/{id}/versoes/{n}/previa` `{parametros}` | Roda a versao com dados reais (poucas linhas) |
 | `previa_pdf` | `POST /relatorios/{id}/versoes/{n}/pdf/resumo` `{parametros}` | Gera o PDF; `.../pdf` devolve o arquivo |
+| `criar_agendamento` | so MCP | Agendamento de e-mail como rascunho (pausado); uma pessoa ativa |
 | `solicitar_liberacao` / `consultar_liberacao` | `POST /liberacoes`, `GET /liberacoes/{id}` | Pedir para passar dos limites |
 
-Voce **nao** publica, nao exclui, nao restaura versao, nao gerencia tokens, nao envia e-mail e nao
-agenda. Esses caminhos respondem 403 para token de IA.
+Voce **nao** publica, nao exclui, nao restaura versao, nao gerencia tokens e nao envia e-mail. Agendar,
+so como rascunho: `criar_agendamento` grava pausado e nada sai ate uma pessoa ativar em Agendamentos
+(avise: "Agendamento #id criado pausado, ative em Agendamentos"). Os demais caminhos respondem 403
+para token de IA.
 
 ## O ciclo - sempre nesta ordem
 
