@@ -155,11 +155,14 @@ class ReportService(
 
     /** Previa de uma versao (rascunho ou antiga) sem publica-la. Exige permissao de edicao. */
     @Transactional(readOnly = true)
-    fun runVersion(id: UUID, versionNumber: Int, ctx: UpstreamContext, request: ReportRunRequest): ReportRunResponse =
-        runPage(versionService.transientReport(id, versionNumber), ctx, request)
+    fun runVersion(id: UUID, versionNumber: Int, ctx: UpstreamContext, request: ReportRunRequest): ReportRunResponse {
+        requireRunAccess(id)
+        return runPage(versionService.transientReport(id, versionNumber), ctx, request)
+    }
 
     @Transactional(readOnly = true)
     fun generateVersionPdf(id: UUID, versionNumber: Int, ctx: UpstreamContext, request: ReportRunRequest): ByteArray {
+        requireRunAccess(id)
         // JRXML de IA ja foi validado ao gravar; confere de novo antes de compilar no servidor.
         val version = versionService.get(id, versionNumber)
         if (version.authorType == ReportVersionAuthorType.AI_TOKEN.name) {
@@ -239,6 +242,28 @@ class ReportService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
         }
         requireRunnable(entity)
+        return compareEntity(entity, ctx, request)
+    }
+
+    /** Comparacao de uma versao (rascunho ou antiga) com o SAP, sem publica-la. */
+    @Transactional(readOnly = true)
+    fun compareVersion(id: UUID, versionNumber: Int, ctx: UpstreamContext, request: ReportRunRequest): ComparisonResponse {
+        requireRunAccess(id)
+        return compareEntity(versionService.transientReport(id, versionNumber), ctx, request)
+    }
+
+    /**
+     * Executar, PDF e comparacao de versao exigem editar (transientReport) e tambem executar o relatorio:
+     * na ACL as duas sao independentes, e as tres trazem dados.
+     */
+    private fun requireRunAccess(id: UUID) {
+        val report = repository.findById(id).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "Report nao encontrado")
+        }
+        accessControl.requireReportAccess(report, AccessAction.RUN)
+    }
+
+    private fun compareEntity(entity: ReportEntity, ctx: UpstreamContext, request: ReportRunRequest): ComparisonResponse {
         val secondSql = entity.secondSql?.trim().takeIf { !it.isNullOrBlank() }
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Relatorio sem SQL de comparacao configurado")
 

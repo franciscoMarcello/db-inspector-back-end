@@ -1,10 +1,12 @@
 package com.chico.dbinspector.report
 
+import com.chico.dbinspector.web.UpstreamContext
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import org.springframework.core.MethodParameter
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
@@ -12,6 +14,10 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.springframework.test.web.servlet.setup.MockMvcBuilders
+import org.springframework.web.bind.support.WebDataBinderFactory
+import org.springframework.web.context.request.NativeWebRequest
+import org.springframework.web.method.support.HandlerMethodArgumentResolver
+import org.springframework.web.method.support.ModelAndViewContainer
 import org.springframework.web.server.ResponseStatusException
 import java.util.UUID
 
@@ -23,6 +29,7 @@ class ReportVersionControllerTest {
     private val mockMvc: MockMvc = MockMvcBuilders
         .standaloneSetup(ReportVersionController(versionService, reportService))
         .setMessageConverters(MappingJackson2HttpMessageConverter(mapper))
+        .setCustomArgumentResolvers(FixedUpstreamContextResolver(CTX))
         .build()
 
     private val reportId = UUID.randomUUID()
@@ -39,6 +46,30 @@ class ReportVersionControllerTest {
             .andExpect(jsonPath("$[0].status").value("DRAFT"))
             .andExpect(jsonPath("$[0].authorType").value("AI_TOKEN"))
             .andExpect(jsonPath("$[1].status").value("PUBLISHED"))
+    }
+
+    @Test
+    fun `comparar versao repassa os parametros e devolve o resultado`() {
+        val response = ComparisonResponse(
+            name = "Rascunho v8",
+            comparisonKey = "id",
+            source1 = ComparisonSource("Sistema", listOf("id"), emptyList(), 0),
+            source2 = ComparisonSource("SAP HANA", listOf("id"), emptyList(), 0),
+            diff = null
+        )
+        val request = ReportRunRequest(params = mapOf("data" to "2026-10-01"))
+        Mockito.`when`(reportService.compareVersion(reportId, 8, CTX, request)).thenReturn(response)
+
+        mockMvc.perform(
+            post("/api/db/reports/$reportId/versions/8/compare")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(request))
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.name").value("Rascunho v8"))
+            .andExpect(jsonPath("$.source2.label").value("SAP HANA"))
+
+        Mockito.verify(reportService).compareVersion(reportId, 8, CTX, request)
     }
 
     @Test
@@ -129,4 +160,21 @@ class ReportVersionControllerTest {
         publishedAt = 0,
         publishedBy = "Ana"
     )
+
+    /** Em producao o UpstreamContext vem do UpstreamContextResolver; aqui basta um valor fixo. */
+    private class FixedUpstreamContextResolver(private val ctx: UpstreamContext) : HandlerMethodArgumentResolver {
+        override fun supportsParameter(parameter: MethodParameter): Boolean =
+            parameter.parameterType == UpstreamContext::class.java
+
+        override fun resolveArgument(
+            parameter: MethodParameter,
+            mavContainer: ModelAndViewContainer?,
+            webRequest: NativeWebRequest,
+            binderFactory: WebDataBinderFactory?
+        ): Any = ctx
+    }
+
+    private companion object {
+        val CTX = UpstreamContext(endpointUrl = "https://api.example.com/sql/exec/", bearer = "Bearer token")
+    }
 }
