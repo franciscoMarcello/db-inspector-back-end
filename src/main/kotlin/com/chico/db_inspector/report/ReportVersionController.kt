@@ -40,6 +40,15 @@ class ReportVersionController(
         ctx: UpstreamContext
     ): ReportRunResponse = reportService.runVersion(reportId, versionNumber, ctx, body ?: ReportRunRequest())
 
+    @PostMapping("/{versionNumber}/compare")
+    @PreAuthorize("hasAuthority('REPORT_WRITE') and hasAuthority('REPORT_RUN')")
+    fun compare(
+        @PathVariable reportId: UUID,
+        @PathVariable versionNumber: Int,
+        @RequestBody(required = false) body: ReportRunRequest?,
+        ctx: UpstreamContext
+    ): ComparisonResponse = reportService.compareVersion(reportId, versionNumber, ctx, body ?: ReportRunRequest())
+
     @PostMapping("/{versionNumber}/pdf")
     @PreAuthorize("hasAuthority('REPORT_WRITE') and hasAuthority('REPORT_RUN')")
     fun pdf(
